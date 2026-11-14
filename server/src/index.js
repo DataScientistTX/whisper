@@ -1,10 +1,18 @@
 import http from 'node:http';
 import { createApp } from './app.js';
 import { createApns } from './apns.js';
+import { filterFromEnv } from './filter.js';
+import { createReportSink } from './reports.js';
 
 const port = Number(process.env.PORT) || 3000;
 const push = createApns(process.env);
-const { handler, state } = createApp({ push });
+const { handler, state } = createApp({
+  push,
+  filter: filterFromEnv(process.env),
+  adminToken: process.env.ADMIN_TOKEN || null,
+  onReport: createReportSink(process.env),
+});
+if (!process.env.REPORT_WEBHOOK_URL) console.warn('[whisper] REPORT_WEBHOOK_URL not set: abuse reports only go to the log');
 
 const server = http.createServer(handler);
 server.keepAliveTimeout = 65_000;

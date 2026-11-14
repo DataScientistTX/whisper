@@ -21,6 +21,25 @@ enum ComposeTarget: Identifiable, Hashable {
     }
 }
 
+enum ReportTarget: Identifiable {
+    case person(Person)
+    case incoming(IncomingRequest)
+
+    var id: String {
+        switch self {
+        case .person(let p): "p-\(p.id)"
+        case .incoming(let r): "r-\(r.id)"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .person(let p): p.title
+        case .incoming(let r): r.from.title
+        }
+    }
+}
+
 /// The app's state: hidden or visible, who is nearby, and the inbox.
 @MainActor
 final class SessionStore: ObservableObject {
@@ -267,6 +286,36 @@ final class SessionStore: ObservableObject {
             lastError = Self.describe(error)
         }
         await refresh()
+    }
+
+    func block(_ person: Person) async {
+        noteInteraction()
+        people.removeAll { $0.id == person.id }
+        do {
+            try await api.block(personId: person.id)
+        } catch {
+            lastError = Self.describe(error)
+        }
+        await refresh()
+    }
+
+    /// Returns an error message, or nil when the report went through.
+    func report(_ target: ReportTarget, reason: ReportReason, note: String) async -> String? {
+        noteInteraction()
+        do {
+            switch target {
+            case .person(let p):
+                try await api.report(personId: p.id, reason: reason, note: note)
+                people.removeAll { $0.id == p.id }
+            case .incoming(let r):
+                try await api.report(requestId: r.id, reason: reason, note: note)
+                incoming.removeAll { $0.id == r.id }
+            }
+            await refresh()
+            return nil
+        } catch {
+            return Self.describe(error)
+        }
     }
 
     // MARK: Push

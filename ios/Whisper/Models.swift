@@ -130,6 +130,22 @@ enum ISODate {
     }
 }
 
+enum ReportReason: String, CaseIterable, Identifiable {
+    case harassment, threat, sexual, hate, spam, other
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .harassment: "Harassment or bullying"
+        case .threat: "Threats or violence"
+        case .sexual: "Sexual content"
+        case .hate: "Hate speech"
+        case .spam: "Spam"
+        case .other: "Something else"
+        }
+    }
+}
+
 enum QuickMessages {
     static let all = [
         "Your headlights are off",

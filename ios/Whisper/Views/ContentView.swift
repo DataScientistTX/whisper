@@ -2,13 +2,18 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: SessionStore
+    @AppStorage("whisper.termsAccepted.v1") private var termsAccepted = false
 
     var body: some View {
-        switch store.phase {
-        case .hidden, .joining:
-            HiddenView()
-        case .visible:
-            VisibleView()
+        if !termsAccepted {
+            TermsView { termsAccepted = true }
+        } else {
+            switch store.phase {
+            case .hidden, .joining:
+                HiddenView()
+            case .visible:
+                VisibleView()
+            }
         }
     }
 }

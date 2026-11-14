@@ -57,6 +57,14 @@ struct HiddenView: View {
                     }
                 }
 
+                Section {
+                    Link(destination: URL(string: "mailto:\(Config.supportEmail)")!) {
+                        Label("Report a problem: \(Config.supportEmail)", systemImage: "envelope")
+                    }
+                } footer: {
+                    Text("To report someone you met here, swipe on them or long-press their message in the app.")
+                }
+
                 if location.isDenied {
                     Section {
                         Text("Location is turned off for Whisper.")
