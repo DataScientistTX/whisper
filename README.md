@@ -15,7 +15,15 @@ Whisper finds people by GPS through a small server, and requests arrive as push 
 4. **They decide.** The push says only "Blue Fox · White Toyota wants to send you a message". They tap Accept, Decline or Decline & block, right from the lock screen. Only Accept releases the text, and declined text is deleted.
 5. **Go hidden.** Tapping Go hidden, 3 hours passing, or 15 minutes of inactivity erases the session.
 
-**Anti-spam:** you can only message people currently near you. There's a cap of 3 unanswered requests per person and 6 sends a minute, and blocking hides both people from each other.
+**Anti-spam:** you can only message people currently near you. There's a cap of 3 unanswered requests per person and 6 sends a minute, and blocking hides both people from each other. On top of that:
+
+- "Everyone nearby" can be used once every 2 minutes.
+- The same text (ignoring case, spacing and punctuation) can go to at most 5 people in 10 minutes.
+- If 5 people decline your messages within 10 minutes, you can't send for 10 minutes.
+- One live session per phone: going visible again replaces the old session, so one phone can't pose as several people.
+- Locations that jump faster than ~430 km/h are rejected, which stops spoofed GPS from teleporting next to someone.
+- Each IP is limited to 600 requests a minute and 50 live sessions. These limits are generous on purpose, because phones on the same carrier often share an IP. Rate-limited answers carry `Retry-After`.
+- Suspensions from reports ban the phone for 24 hours but the network for only 1 hour, for the same reason.
 
 **Privacy:** no accounts, a random nickname, in-memory storage only, and no logging of locations or message text. The one exception is an abuse report: the text of a message someone reports goes to the moderators.
 
@@ -26,7 +34,7 @@ Whisper carries anonymous messages between strangers, so App Store guideline 1.2
 - **Content filter.** Messages, nicknames and descriptions are checked against a word and phrase list (insults, sexual content, threats, slurs) before anything is delivered. Common evasions are normalised first: `f.u.c.k`, `fuuuck`, `b1tch` and accents. Add words with `BLOCKLIST_EXTRA`.
 - **Report.** You can report a request, an accepted message, or someone on the nearby list (swipe or long-press). A report always blocks the person as well.
 - **Block.** Available from the nearby list and from any request. Blocking hides both people from each other.
-- **Automatic suspension.** When 3 different people report someone, their session ends, and their device (push token) and network are banned for 24 hours.
+- **Automatic suspension.** When 3 different people report someone, their session ends, their device (push token) is banned for 24 hours, and their network for 1 hour.
 - **Timely response.** Every report is logged and posted to `REPORT_WEBHOOK_URL` (a Slack or Discord webhook), so you hear about it within seconds. With `ADMIN_TOKEN` set, `GET /admin/reports` lists recent reports and `POST /admin/sessions/:id/suspend` suspends someone by hand.
 - **Terms and contact.** On first launch people agree to zero-tolerance terms, and the app shows a support email (`Config.supportEmail`).
 

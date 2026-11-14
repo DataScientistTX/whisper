@@ -16,6 +16,8 @@ if (!process.env.REPORT_WEBHOOK_URL) console.warn('[whisper] REPORT_WEBHOOK_URL 
 
 const server = http.createServer(handler);
 server.keepAliveTimeout = 65_000;
+server.headersTimeout = 15_000; // slow-client protection
+server.requestTimeout = 20_000;
 server.listen(port, () => {
   console.log(`[whisper] listening on :${port} (push ${push.configured ? 'enabled' : 'disabled'})`);
 });

@@ -219,7 +219,11 @@ final class SessionStore: ObservableObject {
         }
         do {
             if let fix = location.latest {
-                try await api.putLocation(fix, heading: location.travelHeading)
+                do {
+                    try await api.putLocation(fix, heading: location.travelHeading)
+                } catch APIError.server {
+                    // e.g. a GPS glitch the server rejects as implausible: skip this fix.
+                }
                 let n = try await api.nearby(radius: range.rawValue, foreground: isForeground)
                 people = n.people
             }
