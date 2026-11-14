@@ -1,3 +1,97 @@
 # Whisper
 
-Anonymous messages to people nearby.
+Whisper is an iPhone app for sending short, anonymous messages to people physically near you: the car in the next lane, another table at a restaurant. There's no login and no names. The other person has to accept before they see the message, so nobody gets spammed.
+
+- **Main use:** traffic. "Your headlights are off", "Can I merge in front of you?", "I'm the white Toyota, can I get into the right lane?"
+- **Also:** bars, restaurants and other venues.
+
+## How it works
+
+Whisper finds people by GPS through a small server, and requests arrive as push notifications, so it works with the app in the background.
+
+1. **Go visible.** You get an anonymous session, and the app sends your location every 4 seconds. iOS shows the blue location pill while it runs.
+2. **See who's nearby.** Within your range (Close 40 m, Normal 80 m, Wide 150 m) you see each person's nickname, description, rough distance and direction ("~25 m · ahead left"). Exact coordinates are never shared.
+3. **Send.** Pick a quick message or type your own (140 characters max), to one person or everyone nearby.
+4. **They decide.** The push says only "Blue Fox · White Toyota wants to send you a message". They tap Accept, Decline or Decline & block, right from the lock screen. Only Accept releases the text, and declined text is deleted.
+5. **Go hidden.** Tapping Go hidden, 3 hours passing, or 15 minutes of inactivity erases the session.
+
+**Anti-spam:** you can only message people currently near you. There's a cap of 3 unanswered requests per person and 6 sends a minute, and blocking hides both people from each other.
+
+**Privacy:** no accounts, a random nickname, in-memory storage only, and no logging of locations or message text.
+
+## Repository layout
+
+```
+server/            Zero-dependency Node.js server (Node 20+), deploys to Railway
+  src/app.js       State and HTTP API
+  src/apns.js      Apple Push client (HTTP/2, JWT ES256)
+  src/geo.js       Distance, bearing, "ahead left" labels
+  test/            node:test suite (npm test)
+ios/               SwiftUI app, iOS 17+
+  project.yml      XcodeGen spec (generates Whisper.xcodeproj)
+  Whisper/         App sources; Config.swift holds the server URL
+scripts/
+  fake-person.mjs  A fake nearby person for testing with one phone
+```
+
+## API
+
+All `/v1` calls except `POST /v1/sessions` need `Authorization: Bearer <token>`.
+
+| Method | Path | What it does |
+|---|---|---|
+| POST | `/v1/sessions` | Go visible, get an anonymous token |
+| GET | `/v1/me` | Your nickname, description and expiry |
+| PATCH | `/v1/me` | Update nickname, description, push token, radius |
+| DELETE | `/v1/me` | Go hidden (erases you) |
+| PUT | `/v1/me/location` | Report location (`lat`, `lon`, `accuracy`, `heading`) |
+| GET | `/v1/nearby?radius=normal` | People nearby: nickname, distance, direction |
+| POST | `/v1/requests` | Ask to message one person (`to: <id>`) or everyone nearby (`to: "everyone"`) |
+| GET | `/v1/inbox` | Incoming requests and messages, sent statuses |
+| POST | `/v1/requests/:id/accept` | Accept and receive the text |
+| POST | `/v1/requests/:id/decline` | Decline, optionally block (`{"block": true}`) |
+| GET | `/health` | `{"ok":true}` |
+
+Background location reports and background polling don't count as activity. Any user action, or a request sent with `X-Whisper-Foreground: 1` while the app is on screen, does.
+
+## Setup
+
+1. **Deploy the server.** In Railway choose New Project → Deploy from GitHub, pick this repo, set Root Directory to `server`, and generate a domain. Check that `/health` returns `{"ok":true}`. Keep it at 1 replica, because all state is in memory (`server/railway.json` already sets this).
+2. **Create the APNs key.** This needs an Apple Developer account ($99 a year). In the developer portal go to Keys → +, enable Apple Push Notifications service, and download the `.p8` file (you can only download it once).
+3. **Set the Railway variables:**
+   - `APNS_KEY`: the contents of the `.p8` file (newlines or `\n` both work)
+   - `APNS_KEY_ID`: the key's 10-character ID
+   - `APNS_TEAM_ID`: your team ID
+   - `APNS_BUNDLE_ID`: the app's bundle ID, e.g. `com.yourname.whisper`
+   - `APNS_ENV`: `sandbox` for builds run from Xcode (the default), `production` for TestFlight and the App Store
+4. **Configure the app.** Set `apiBaseURL` in `ios/Whisper/Config.swift` to the Railway URL, and set `PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` to match `APNS_BUNDLE_ID`.
+5. **Build.** Run `brew install xcodegen`, then `cd ios && xcodegen`, then open `Whisper.xcodeproj` in Xcode, pick your Team under Signing & Capabilities, and run on a real iPhone (push and GPS don't work properly in the simulator).
+6. **Test with one phone.** Run `node scripts/fake-person.mjs <url> <lat> <lon>` with your own coordinates. A "Test Bot · Grey Tesla" appears next to you, asks to message you, and auto-accepts what you send it.
+
+## Running the server locally
+
+```sh
+cd server
+npm test          # 12 tests, no dependencies to install
+npm start         # listens on $PORT or 3000; pushes are skipped without APNS_* set
+```
+
+## Status
+
+v0.2. The server passes its test suite and an end-to-end run against the fake person. The iOS app has not been compiled yet, because that needs Xcode on a Mac. (v0.1 was a Bluetooth-only prototype that needed the app open on both phones.)
+
+### Known limits
+
+- GPS is accurate to about 5–10 m outdoors and worse indoors, so people's descriptions do the real work of telling who's who.
+- Being visible keeps GPS running, about like a navigation app.
+- A server restart wipes sessions. The app reconnects quietly with the same nickname.
+- Apple reviews background-location apps closely, and the driving use case adds distracted-driving scrutiny.
+- There's no app icon yet.
+
+### Next steps
+
+- [ ] First Xcode build and a two-phone test
+- [ ] Check "Whisper" availability on the App Store
+- [ ] Siri or CarPlay voice sending, so drivers never type
+- [ ] Report-abuse flow
+- [ ] Redis GEO store if it needs more than one server instance
