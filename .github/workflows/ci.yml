@@ -50,7 +50,9 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
-            | tee build.log | grep -E "error:|warning: .*(deprecated|concurrency)|BUILD (SUCCEEDED|FAILED)" || true
+            | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
+          echo "--- Warnings in app sources ---"
+          grep -E "/Whisper/.*warning:" build.log | sort -u || echo "none"
           grep -q "BUILD SUCCEEDED" build.log
       - name: Upload build log
         if: always()
