@@ -38,6 +38,18 @@ Whisper carries anonymous messages between strangers, so App Store guideline 1.2
 - **Timely response.** Every report is logged and posted to `REPORT_WEBHOOK_URL` (a Slack or Discord webhook), so you hear about it within seconds. With `ADMIN_TOKEN` set, `GET /admin/reports` lists recent reports and `POST /admin/sessions/:id/suspend` suspends someone by hand.
 - **Terms and contact.** On first launch people agree to zero-tolerance terms, and the app shows a support email (`Config.supportEmail`).
 
+## Siri and voice sending
+
+Drivers shouldn't type, so the common messages work by voice through Siri, including Siri in CarPlay:
+
+- "Hey Siri, **Whisper headlights off**" (also: *can I merge*, *trunk open*, *tire low*, *gas cap open*, *something dragging*, *turn signal on*, *thanks*)
+- "Hey Siri, **send a custom Whisper**" asks what it should say, and the dictated text goes through the same content filter
+- "Hey Siri, **go visible on Whisper**" / "**hide me on Whisper**"
+
+A spoken message goes to **the car ahead** by default: the closest person whose direction is "ahead", then "ahead left" or "ahead right", then simply the closest. In the Shortcuts app you can pick "the closest person" or "everyone nearby" instead. Siri reads back who it went to. These are App Intents in `ios/Whisper/Intents/`, so there's no extension and no extra entitlement.
+
+A full CarPlay screen is a separate step: Apple only grants the CarPlay entitlement to messaging apps through SiriKit messaging, which needs a request to Apple.
+
 ## Repository layout
 
 ```
@@ -49,6 +61,7 @@ server/            Zero-dependency Node.js server (Node 20+), deploys to Railway
 ios/               SwiftUI app, iOS 17+
   project.yml      XcodeGen spec (generates Whisper.xcodeproj)
   Whisper/         App sources; Config.swift holds the server URL
+  Whisper/Intents/ Siri and Shortcuts (App Intents)
 scripts/
   fake-person.mjs  A fake nearby person for testing with one phone
 ```
@@ -118,5 +131,5 @@ v0.2. The server passes its test suite and an end-to-end run against the fake pe
 
 - [ ] First Xcode build and a two-phone test
 - [ ] Check "Whisper" availability on the App Store
-- [ ] Siri or CarPlay voice sending, so drivers never type
+- [ ] Test Siri phrases on a device; consider a CarPlay entitlement request
 - [ ] Redis GEO store if it needs more than one server instance

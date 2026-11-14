@@ -1,4 +1,5 @@
 import SwiftUI
+import AppIntents
 
 struct VisibleView: View {
     @EnvironmentObject private var store: SessionStore
@@ -101,6 +102,12 @@ struct VisibleView: View {
                     Section {
                         Text(error).foregroundStyle(.red)
                     }
+                }
+
+                Section {
+                    SiriTipView(intent: SendQuickWhisperIntent())
+                } footer: {
+                    Text("Driving? Say \"Hey Siri, Whisper headlights off\" to message the car ahead without touching your phone.")
                 }
             }
             .navigationTitle("Whisper")
