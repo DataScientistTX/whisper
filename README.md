@@ -17,7 +17,18 @@ Whisper finds people by GPS through a small server, and requests arrive as push 
 
 **Anti-spam:** you can only message people currently near you. There's a cap of 3 unanswered requests per person and 6 sends a minute, and blocking hides both people from each other.
 
-**Privacy:** no accounts, a random nickname, in-memory storage only, and no logging of locations or message text.
+**Privacy:** no accounts, a random nickname, in-memory storage only, and no logging of locations or message text. The one exception is an abuse report: the text of a message someone reports goes to the moderators.
+
+## Safety and moderation
+
+Whisper carries anonymous messages between strangers, so App Store guideline 1.2 applies. It needs a content filter, a way to report and block people, timely action on reports, and published contact details. Here's how each is covered:
+
+- **Content filter.** Messages, nicknames and descriptions are checked against a word and phrase list (insults, sexual content, threats, slurs) before anything is delivered. Common evasions are normalised first: `f.u.c.k`, `fuuuck`, `b1tch` and accents. Add words with `BLOCKLIST_EXTRA`.
+- **Report.** You can report a request, an accepted message, or someone on the nearby list (swipe or long-press). A report always blocks the person as well.
+- **Block.** Available from the nearby list and from any request. Blocking hides both people from each other.
+- **Automatic suspension.** When 3 different people report someone, their session ends, and their device (push token) and network are banned for 24 hours.
+- **Timely response.** Every report is logged and posted to `REPORT_WEBHOOK_URL` (a Slack or Discord webhook), so you hear about it within seconds. With `ADMIN_TOKEN` set, `GET /admin/reports` lists recent reports and `POST /admin/sessions/:id/suspend` suspends someone by hand.
+- **Terms and contact.** On first launch people agree to zero-tolerance terms, and the app shows a support email (`Config.supportEmail`).
 
 ## Repository layout
 
@@ -50,6 +61,10 @@ All `/v1` calls except `POST /v1/sessions` need `Authorization: Bearer <token>`.
 | GET | `/v1/inbox` | Incoming requests and messages, sent statuses |
 | POST | `/v1/requests/:id/accept` | Accept and receive the text |
 | POST | `/v1/requests/:id/decline` | Decline, optionally block (`{"block": true}`) |
+| POST | `/v1/blocks` | Block someone from the nearby list (`personId`) |
+| POST | `/v1/reports` | Report a request or message (`requestId`) or a person (`personId`), with `reason` and an optional `note`. This also blocks them |
+| GET | `/admin/reports` | Recent reports (needs `Authorization: Bearer $ADMIN_TOKEN`) |
+| POST | `/admin/sessions/:id/suspend` | Suspend someone for 24 hours (admin) |
 | GET | `/health` | `{"ok":true}` |
 
 Background location reports and background polling don't count as activity. Any user action, or a request sent with `X-Whisper-Foreground: 1` while the app is on screen, does.
@@ -64,7 +79,10 @@ Background location reports and background polling don't count as activity. Any 
    - `APNS_TEAM_ID`: your team ID
    - `APNS_BUNDLE_ID`: the app's bundle ID, e.g. `com.yourname.whisper`
    - `APNS_ENV`: `sandbox` for builds run from Xcode (the default), `production` for TestFlight and the App Store
-4. **Configure the app.** Set `apiBaseURL` in `ios/Whisper/Config.swift` to the Railway URL, and set `PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` to match `APNS_BUNDLE_ID`.
+   - `REPORT_WEBHOOK_URL`: a Slack or Discord incoming webhook that receives abuse reports (strongly recommended)
+   - `ADMIN_TOKEN`: a long random string that turns on the `/admin` endpoints
+   - `BLOCKLIST_EXTRA`: optional extra filtered words or phrases, comma-separated
+4. **Configure the app.** Set `apiBaseURL` in `ios/Whisper/Config.swift` to the Railway URL and `supportEmail` to an address you read, and set `PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` to match `APNS_BUNDLE_ID`.
 5. **Build.** Run `brew install xcodegen`, then `cd ios && xcodegen`, then open `Whisper.xcodeproj` in Xcode, pick your Team under Signing & Capabilities, and run on a real iPhone (push and GPS don't work properly in the simulator).
 6. **Test with one phone.** Run `node scripts/fake-person.mjs <url> <lat> <lon>` with your own coordinates. A "Test Bot · Grey Tesla" appears next to you, asks to message you, and auto-accepts what you send it.
 
@@ -72,7 +90,7 @@ Background location reports and background polling don't count as activity. Any 
 
 ```sh
 cd server
-npm test          # 12 tests, no dependencies to install
+npm test          # no dependencies to install
 npm start         # listens on $PORT or 3000; pushes are skipped without APNS_* set
 ```
 
@@ -93,5 +111,4 @@ v0.2. The server passes its test suite and an end-to-end run against the fake pe
 - [ ] First Xcode build and a two-phone test
 - [ ] Check "Whisper" availability on the App Store
 - [ ] Siri or CarPlay voice sending, so drivers never type
-- [ ] Report-abuse flow
 - [ ] Redis GEO store if it needs more than one server instance

@@ -1,9 +1,10 @@
 // Whisper server core: in-memory state plus the HTTP API. Nothing is written to
 // disk and neither locations nor message text are ever logged.
 
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { distance, bearing, directionLabel, roughDistance, validCoord } from './geo.js';
 import { randomNickname } from './names.js';
+import { createFilter } from './filter.js';
 
 export const LIMITS = {
   sessionMaxMs: 3 * 60 * 60 * 1000,      // a session lives at most 3 hours
@@ -20,7 +21,13 @@ export const LIMITS = {
   rangeSlackM: 20,                       // GPS wobble allowance when sending
   sessionsPerIpPer10Min: 30,
   maxBodyBytes: 8 * 1024,
+  reportsToSuspend: 3,                   // distinct people reporting someone suspends them
+  suspensionMs: 24 * 60 * 60 * 1000,     // ... and bans their device and network for a day
+  maxStoredReports: 500,
+  maxReportNoteLength: 200,
 };
+
+export const REPORT_REASONS = ['harassment', 'threat', 'sexual', 'hate', 'spam', 'other'];
 
 class HttpError extends Error {
   constructor(status, code, message) { super(message ?? code); this.status = status; this.code = code; }
@@ -38,7 +45,7 @@ function cleanString(value, max, field) {
   return s;
 }
 
-export function createState({ now = () => Date.now() } = {}) {
+export function createState({ now = () => Date.now(), filter = createFilter() } = {}) {
   const sessions = new Map(); // id -> session
   const tokens = new Map();   // sha256(token) -> id
   const requests = new Map(); // id -> request
@@ -46,6 +53,24 @@ export function createState({ now = () => Date.now() } = {}) {
   // A declined request is deleted at once (text included). The sender still sees
   // "declined" through this short-lived, text-free tombstone.
   const tombstones = new Map(); // requestId -> { from, toNickname, toDescription, createdAt, at }
+  const bans = new Map();       // 'push:<token>' | 'ip:<hash>' -> until (ms)
+  const reports = [];           // newest last, capped at LIMITS.maxStoredReports
+
+  const ipKey = (ip) => 'ip:' + createHash('sha256').update('whisper-ip:' + ip).digest('hex').slice(0, 32);
+  const isBanned = (key) => key && (bans.get(key) ?? 0) > now();
+  function assertNotBanned({ ip, pushToken }) {
+    if ((ip && isBanned(ipKey(ip))) || (pushToken && isBanned('push:' + pushToken))) {
+      throw new HttpError(403, 'suspended', 'This device is suspended after reports from other people. Try again tomorrow.');
+    }
+  }
+  function assertClean(value, field) {
+    if (value && filter.isBlocked(value)) {
+      throw new HttpError(422, 'blocked_content', field === 'text'
+        ? "That message can't be sent. Please keep it friendly."
+        : `That ${field} isn't allowed. Please pick something else.`);
+    }
+    return value;
+  }
 
   function eraseSession(id) {
     const s = sessions.get(id);
@@ -70,6 +95,7 @@ export function createState({ now = () => Date.now() } = {}) {
     for (const [rid, r] of requests) {
       if (r.status === 'pending' && t - r.createdAt > LIMITS.requestTtlMs) requests.delete(rid);
     }
+    for (const [key, until] of bans) if (until <= t) bans.delete(key);
     for (const [ip, hits] of ipHits) {
       const kept = hits.filter((h) => t - h < 10 * 60 * 1000);
       if (kept.length) ipHits.set(ip, kept); else ipHits.delete(ip);
@@ -92,6 +118,8 @@ export function createState({ now = () => Date.now() } = {}) {
 
   function createSession({ nickname, description, pushToken } = {}, ip = '') {
     const t = now();
+    const push = validPushToken(pushToken);
+    assertNotBanned({ ip, pushToken: push });
     const hits = (ipHits.get(ip) ?? []).filter((h) => t - h < 10 * 60 * 1000);
     if (hits.length >= LIMITS.sessionsPerIpPer10Min) throw new HttpError(429, 'rate_limited', 'Too many new sessions, try again later');
     hits.push(t);
@@ -101,9 +129,11 @@ export function createState({ now = () => Date.now() } = {}) {
     const s = {
       id: newId(),
       tokenHash: hashToken(token),
-      nickname: cleanString(nickname, LIMITS.maxNicknameLength, 'nickname') || randomNickname(),
-      description: cleanString(description, LIMITS.maxDescriptionLength, 'description') ?? '',
-      pushToken: validPushToken(pushToken),
+      nickname: assertClean(cleanString(nickname, LIMITS.maxNicknameLength, 'nickname'), 'nickname') || randomNickname(),
+      description: assertClean(cleanString(description, LIMITS.maxDescriptionLength, 'description'), 'description') ?? '',
+      pushToken: push,
+      ipKey: ip ? ipKey(ip) : null,
+      reportedBy: new Set(),
       loc: null,
       radius: LIMITS.radii.normal,
       createdAt: t,
@@ -139,9 +169,16 @@ export function createState({ now = () => Date.now() } = {}) {
   const touch = (s) => { s.lastActive = now(); };
 
   function updateMe(s, body) {
-    if ('nickname' in body) s.nickname = cleanString(body.nickname, LIMITS.maxNicknameLength, 'nickname') || s.nickname;
-    if ('description' in body) s.description = cleanString(body.description, LIMITS.maxDescriptionLength, 'description') ?? '';
-    if ('pushToken' in body) s.pushToken = validPushToken(body.pushToken);
+    if ('nickname' in body) s.nickname = assertClean(cleanString(body.nickname, LIMITS.maxNicknameLength, 'nickname'), 'nickname') || s.nickname;
+    if ('description' in body) s.description = assertClean(cleanString(body.description, LIMITS.maxDescriptionLength, 'description'), 'description') ?? '';
+    if ('pushToken' in body) {
+      const push = validPushToken(body.pushToken);
+      if (push && isBanned('push:' + push)) {
+        eraseSession(s.id);
+        throw new HttpError(403, 'suspended', 'This device is suspended after reports from other people. Try again tomorrow.');
+      }
+      s.pushToken = push;
+    }
     if ('radius' in body) s.radius = parseRadius(body.radius);
     return publicSelf(s);
   }
@@ -194,6 +231,7 @@ export function createState({ now = () => Date.now() } = {}) {
   function sendRequest(s, { to, text }) {
     const clean = cleanString(text, LIMITS.maxTextLength, 'text');
     if (!clean) throw new HttpError(400, 'empty_text', 'Message is empty');
+    assertClean(clean, 'text');
     if (!s.loc) throw new HttpError(409, 'no_location', 'Send your location first');
     const t = now();
     s.sends = s.sends.filter((x) => t - x < 60 * 1000);
@@ -264,13 +302,72 @@ export function createState({ now = () => Date.now() } = {}) {
     if (r.status === 'accepted') throw new HttpError(409, 'already_accepted');
     const fromId = r.from;
     requests.delete(r.id); // declined text is deleted right away
-    if (block && fromId) {
-      s.blocks.add(fromId);
-      for (const [rid, x] of requests) {
-        if (x.status === 'pending' && ((x.from === fromId && x.to === s.id) || (x.from === s.id && x.to === fromId))) requests.delete(rid);
-      }
-    }
+    if (block && fromId) blockPerson(s, fromId);
     return { fromId, blocked: Boolean(block && fromId) };
+  }
+
+  // Blocking hides both people from each other and drops anything pending between them.
+  function blockPerson(s, otherId) {
+    if (typeof otherId !== 'string' || otherId === s.id) throw new HttpError(400, 'invalid_person');
+    s.blocks.add(otherId);
+    for (const [rid, x] of requests) {
+      if (x.status === 'pending' && ((x.from === otherId && x.to === s.id) || (x.from === s.id && x.to === otherId))) requests.delete(rid);
+    }
+    return { ok: true };
+  }
+
+  // Ends someone's session and bans their device (push token) and network for a day.
+  function suspend(id, reason) {
+    const target = sessions.get(id);
+    if (!target) return false;
+    const until = now() + LIMITS.suspensionMs;
+    if (target.pushToken) bans.set('push:' + target.pushToken, until);
+    if (target.ipKey) bans.set(target.ipKey, until);
+    eraseSession(id);
+    for (const r of reports) if (r.target.id === id) r.suspended = reason;
+    return true;
+  }
+
+  // A report always blocks the person too. Reports are the one place message
+  // text is kept: the reporter chose to share it so a moderator can review it.
+  function report(s, { requestId, personId, reason, note } = {}) {
+    if (!REPORT_REASONS.includes(reason)) throw new HttpError(400, 'invalid_reason', `reason must be one of: ${REPORT_REASONS.join(', ')}`);
+    const cleanNote = cleanString(note, LIMITS.maxReportNoteLength, 'note') ?? '';
+    let target;
+    let text = null;
+    if (requestId !== undefined) {
+      const r = requests.get(requestId);
+      if (!r || r.to !== s.id || !r.from) throw new HttpError(404, 'not_found', 'Request not found');
+      target = { id: r.from, nickname: r.fromNickname, description: r.fromDescription };
+      if (r.status === 'accepted') text = r.text;
+      else requests.delete(r.id); // an unread request from someone you report is dropped unread
+    } else {
+      const o = typeof personId === 'string' && personId !== s.id ? sessions.get(personId) : null;
+      if (!o) throw new HttpError(404, 'not_found', 'That person is gone');
+      target = { id: o.id, nickname: o.nickname, description: o.description };
+    }
+    blockPerson(s, target.id);
+
+    const entry = {
+      id: newId(),
+      at: new Date(now()).toISOString(),
+      reason,
+      note: cleanNote,
+      text,
+      target,
+      reporterId: s.id,
+      suspended: null,
+    };
+    reports.push(entry);
+    if (reports.length > LIMITS.maxStoredReports) reports.splice(0, reports.length - LIMITS.maxStoredReports);
+
+    const reported = sessions.get(target.id);
+    let suspended = false;
+    if (reported) {
+      reported.reportedBy.add(s.id);
+      if (reported.reportedBy.size >= LIMITS.reportsToSuspend) suspended = suspend(reported.id, 'reports');
+    }
+    return { entry, suspended };
   }
 
   function declineWithTombstone(s, id, opts) {
@@ -324,9 +421,10 @@ export function createState({ now = () => Date.now() } = {}) {
   }
 
   return {
-    sessions, requests, tombstones,
+    sessions, requests, tombstones, bans, reports,
     createSession, authenticate, touch, updateMe, setLocation, nearby,
     sendRequest, accept, decline: declineWithTombstone, inbox, eraseSession, sweep, publicSelf,
+    blockPerson, report, suspend,
   };
 }
 
@@ -385,8 +483,18 @@ function acceptedPushPayload(r) {
   };
 }
 
-export function createApp({ now, push, log = console } = {}) {
-  const state = createState({ now });
+export function createApp({ now, push, filter, adminToken, onReport, log = console } = {}) {
+  const state = createState({ now, filter });
+  const reportSink = onReport ?? (async () => {});
+
+  function isAdmin(header) {
+    if (!adminToken) return false;
+    const m = /^Bearer\s+(\S+)$/i.exec(header ?? '');
+    if (!m) return false;
+    const a = Buffer.from(m[1]);
+    const b = Buffer.from(adminToken);
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
   const pusher = push ?? { send: async () => ({ ok: false, reason: 'disabled' }) };
 
   async function notify(session, payload, collapseId) {
@@ -415,6 +523,18 @@ export function createApp({ now, push, log = console } = {}) {
       return send(res, 201, state.createSession(body, ip));
     }
 
+    if (path.startsWith('/admin/')) {
+      if (!isAdmin(req.headers.authorization)) throw new HttpError(404, 'not_found');
+      if (path === '/admin/reports' && method === 'GET') {
+        return send(res, 200, { reports: [...state.reports].reverse() });
+      }
+      const sm = /^\/admin\/sessions\/([A-Za-z0-9_-]+)\/suspend$/.exec(path);
+      if (sm && method === 'POST') {
+        return send(res, 200, { suspended: state.suspend(sm[1], 'admin') });
+      }
+      throw new HttpError(404, 'not_found');
+    }
+
     if (!path.startsWith('/v1/')) throw new HttpError(404, 'not_found');
     const me = state.authenticate(req.headers.authorization);
 
@@ -434,6 +554,15 @@ export function createApp({ now, push, log = console } = {}) {
     }
     if (path === '/v1/nearby' && method === 'GET') {
       return send(res, 200, state.nearby(me, url.searchParams.get('radius') ?? undefined));
+    }
+    if (path === '/v1/blocks' && method === 'POST') {
+      const body = await readJson(req);
+      return send(res, 200, state.blockPerson(me, body.personId));
+    }
+    if (path === '/v1/reports' && method === 'POST') {
+      const { entry, suspended } = state.report(me, await readJson(req));
+      reportSink(entry, { suspended }).catch((e) => log.error?.('[report] sink failed', e?.message));
+      return send(res, 201, { ok: true, blocked: true });
     }
     if (path === '/v1/inbox' && method === 'GET') {
       return send(res, 200, state.inbox(me));

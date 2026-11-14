@@ -3,6 +3,7 @@ import SwiftUI
 struct VisibleView: View {
     @EnvironmentObject private var store: SessionStore
     @State private var composeTarget: ComposeTarget?
+    @State private var reportTarget: ReportTarget?
 
     var body: some View {
         NavigationStack {
@@ -23,7 +24,7 @@ struct VisibleView: View {
                 if !store.pendingIncoming.isEmpty {
                     Section("Wants to message you") {
                         ForEach(store.pendingIncoming) { r in
-                            IncomingRow(request: r)
+                            IncomingRow(request: r) { reportTarget = .incoming(r) }
                         }
                     }
                 }
@@ -45,6 +46,20 @@ struct VisibleView: View {
                                 PersonRow(person: p)
                             }
                             .tint(.primary)
+                            .contextMenu {
+                                Button("Block", systemImage: "hand.raised") {
+                                    Task { await store.block(p) }
+                                }
+                                Button("Report", systemImage: "exclamationmark.bubble", role: .destructive) {
+                                    reportTarget = .person(p)
+                                }
+                            }
+                            .swipeActions {
+                                Button("Report", systemImage: "exclamationmark.bubble") { reportTarget = .person(p) }
+                                    .tint(.red)
+                                Button("Block", systemImage: "hand.raised") { Task { await store.block(p) } }
+                                    .tint(.gray)
+                            }
                         }
                         Button {
                             store.noteInteraction()
@@ -61,6 +76,15 @@ struct VisibleView: View {
                     Section("Messages") {
                         ForEach(store.messages) { r in
                             MessageRow(request: r)
+                                .contextMenu {
+                                    Button("Report", systemImage: "exclamationmark.bubble", role: .destructive) {
+                                        reportTarget = .incoming(r)
+                                    }
+                                }
+                                .swipeActions {
+                                    Button("Report", systemImage: "exclamationmark.bubble") { reportTarget = .incoming(r) }
+                                        .tint(.red)
+                                }
                         }
                     }
                 }
@@ -90,6 +114,9 @@ struct VisibleView: View {
             .refreshable { await store.refresh() }
             .sheet(item: $composeTarget) { target in
                 ComposeView(target: target)
+            }
+            .sheet(item: $reportTarget) { target in
+                ReportView(target: target)
             }
         }
     }
@@ -128,6 +155,7 @@ struct PersonRow: View {
 struct IncomingRow: View {
     @EnvironmentObject private var store: SessionStore
     let request: IncomingRequest
+    var onReport: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -138,8 +166,15 @@ struct IncomingRow: View {
                 Button("Decline") { Task { await store.decline(request, block: false) } }
                     .buttonStyle(.bordered)
                 Spacer()
-                Button("Block", role: .destructive) { Task { await store.decline(request, block: true) } }
-                    .buttonStyle(.borderless)
+                Menu {
+                    Button("Decline & block", systemImage: "hand.raised", role: .destructive) {
+                        Task { await store.decline(request, block: true) }
+                    }
+                    Button("Report", systemImage: "exclamationmark.bubble", role: .destructive, action: onReport)
+                } label: {
+                    Image(systemName: "ellipsis.circle").imageScale(.large)
+                }
+                .buttonStyle(.borderless)
             }
         }
         .padding(.vertical, 4)

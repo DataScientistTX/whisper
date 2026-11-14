@@ -97,6 +97,19 @@ final class APIClient: @unchecked Sendable {
         try await call("POST", "/v1/requests/\(id)/decline", body: ["block": block])
     }
 
+    func block(personId: String) async throws {
+        let _: OKResponse = try await call("POST", "/v1/blocks", body: ["personId": personId])
+    }
+
+    /// Reports a request or message (`requestId`) or someone on the nearby list
+    /// (`personId`). The server blocks them as well.
+    func report(requestId: String? = nil, personId: String? = nil, reason: ReportReason, note: String) async throws {
+        var body: [String: Any] = ["reason": reason.rawValue, "note": note]
+        if let requestId { body["requestId"] = requestId }
+        if let personId { body["personId"] = personId }
+        let _: OKResponse = try await call("POST", "/v1/reports", body: body)
+    }
+
     // MARK: Plumbing
 
     private func call<T: Decodable>(

@@ -6,4 +6,7 @@ enum Config {
 
     /// How often the app reports its location and refreshes while visible.
     static let tickSeconds: Double = 4
+
+    /// Shown in the app so people can reach you about abuse (App Store guideline 1.2).
+    static let supportEmail = "support@example.com"
 }
