@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: SessionStore
-    @AppStorage("whisper.termsAccepted.v1") private var termsAccepted = false
+    @AppStorage("whisper.termsAccepted.v2") private var termsAccepted = false
 
     var body: some View {
         if !termsAccepted {

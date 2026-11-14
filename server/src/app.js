@@ -5,6 +5,7 @@ import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { distance, bearing, directionLabel, roughDistance, validCoord } from './geo.js';
 import { randomNickname } from './names.js';
 import { createFilter } from './filter.js';
+import { createDemo } from './demo.js';
 
 export const LIMITS = {
   sessionMaxMs: 3 * 60 * 60 * 1000,      // a session lives at most 3 hours
@@ -552,7 +553,7 @@ function acceptedPushPayload(r) {
   };
 }
 
-export function createApp({ now, push, filter, adminToken, onReport, log = console } = {}) {
+export function createApp({ now, push, filter, adminToken, onReport, demoCode, log = console } = {}) {
   const state = createState({ now, filter });
   const reportSink = onReport ?? (async () => {});
 
@@ -589,6 +590,14 @@ export function createApp({ now, push, filter, adminToken, onReport, log = conso
       throw new HttpError(429, 'rate_limited', 'Too many requests', Math.ceil((w.start + 60_000 - t) / 1000));
     }
   }
+
+  const demo = createDemo({
+    state,
+    code: demoCode,
+    now,
+    onRequest: (owner, r) => notify(owner, requestPushPayload(r), r.id).catch(() => {}),
+    onAccepted: (sender, r) => notify(sender, acceptedPushPayload(r), `acc-${r.id}`).catch(() => {}),
+  });
 
   async function route(req, res) {
     const url = new URL(req.url, 'http://x');
@@ -633,10 +642,16 @@ export function createApp({ now, push, filter, adminToken, onReport, log = conso
     if (path === '/v1/me') {
       if (method === 'GET') return send(res, 200, state.publicSelf(me));
       if (method === 'PATCH') return send(res, 200, state.updateMe(me, await readJson(req)));
-      if (method === 'DELETE') { state.eraseSession(me.id); return send(res, 200, { ok: true }); }
+      if (method === 'DELETE') {
+        state.eraseSession(me.id);
+        demo.removeBotFor(me.id);
+        return send(res, 200, { ok: true });
+      }
     }
     if (path === '/v1/me/location' && method === 'PUT') {
-      return send(res, 200, state.setLocation(me, await readJson(req)));
+      const result = state.setLocation(me, await readJson(req));
+      demo.afterLocation(me);
+      return send(res, 200, result);
     }
     if (path === '/v1/nearby' && method === 'GET') {
       return send(res, 200, state.nearby(me, url.searchParams.get('radius') ?? undefined));
@@ -656,6 +671,7 @@ export function createApp({ now, push, filter, adminToken, onReport, log = conso
     if (path === '/v1/requests' && method === 'POST') {
       const { created, skipped } = state.sendRequest(me, await readJson(req));
       for (const r of created) notify(state.sessions.get(r.to), requestPushPayload(r), r.id).catch(() => {});
+      demo.afterSend(created);
       return send(res, 201, {
         sent: created.length,
         skipped,
@@ -694,5 +710,6 @@ export function createApp({ now, push, filter, adminToken, onReport, log = conso
     }
   }
 
-  return { handler, state };
+  const sweep = () => { state.sweep(); demo.sweep(); };
+  return { handler, state, sweep, demo };
 }

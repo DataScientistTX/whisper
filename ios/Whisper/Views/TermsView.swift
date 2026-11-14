@@ -13,6 +13,7 @@ struct TermsView: View {
                     Text("Whisper lets you send short notes to people around you. Keep it kind and useful.")
                         .font(.title3)
 
+                    rule("person.badge.shield.checkmark", "18 and older only", "Whisper connects you with strangers nearby, so it's only for adults.")
                     rule("hand.thumbsup", "Be helpful", "Headlights off, trunk open, thanks for letting me in. That's what Whisper is for.")
                     rule("nosign", "Zero tolerance", "No harassment, threats, sexual content, hate speech or spam. Messages like that are filtered, and people who send them get blocked, reported and suspended.")
                     rule("hand.raised", "You're in control", "Nobody can read their message to you until you accept. You can decline, block or report anyone at any time.")
@@ -27,7 +28,7 @@ struct TermsView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 Button(action: onAgree) {
-                    Text("I agree").font(.headline).frame(maxWidth: .infinity)
+                    Text("I'm 18 or older and I agree").font(.headline).frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)

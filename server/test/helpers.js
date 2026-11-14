@@ -3,13 +3,13 @@ import { randomBytes } from 'node:crypto';
 import { createApp } from '../src/app.js';
 
 // Starts the app on a random port with a controllable clock and a fake push sender.
-export async function startServer({ adminToken = 'admin-secret' } = {}) {
+export async function startServer({ adminToken = 'admin-secret', demoCode } = {}) {
   const clock = { t: Date.parse('2026-11-14T12:00:00Z') };
   const pushes = [];
   const push = { send: async (token, payload) => { pushes.push({ token, payload }); return { ok: true, status: 200 }; } };
   const reports = [];
   const onReport = async (report, info) => { reports.push({ report, ...info }); };
-  const { handler, state } = createApp({ now: () => clock.t, push, adminToken, onReport, log: { error() {}, warn() {}, log() {} } });
+  const { handler, state, sweep } = createApp({ now: () => clock.t, push, adminToken, onReport, demoCode, log: { error() {}, warn() {}, log() {} } });
   const server = http.createServer(handler);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -34,7 +34,7 @@ export async function startServer({ adminToken = 'admin-secret' } = {}) {
   }
 
   return {
-    base, call, person, pushes, reports, clock, state,
+    base, call, person, pushes, reports, clock, state, sweep,
     advance: (ms) => { clock.t += ms; },
     close: () => new Promise((r) => server.close(r)),
   };
