@@ -103,9 +103,20 @@ Background location reports and background polling don't count as activity. Any 
    - `REPORT_WEBHOOK_URL`: a Slack or Discord incoming webhook that receives abuse reports (strongly recommended)
    - `ADMIN_TOKEN`: a long random string that turns on the `/admin` endpoints
    - `BLOCKLIST_EXTRA`: optional extra filtered words or phrases, comma-separated
+   - `REVIEW_DEMO_CODE`: a secret phrase of at least 6 characters that turns on App Review demo mode (see below)
 4. **Configure the app.** Set `apiBaseURL` in `ios/Whisper/Config.swift` to the Railway URL and `supportEmail` to an address you read, and set `PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` to match `APNS_BUNDLE_ID`.
 5. **Build.** Run `brew install xcodegen`, then `cd ios && xcodegen`, then open `Whisper.xcodeproj` in Xcode, pick your Team under Signing & Capabilities, and run on a real iPhone (push and GPS don't work properly in the simulator).
 6. **Test with one phone.** Run `node scripts/fake-person.mjs <url> <lat> <lon>` with your own coordinates. A "Test Bot · Grey Tesla" appears next to you, asks to message you, and auto-accepts what you send it.
+
+## App Review demo mode
+
+App Review tests with one phone and can't run `fake-person.mjs`. With `REVIEW_DEMO_CODE` set, anyone whose description is that code gets a **Test Bot · Grey Tesla** about 15 m away within a few seconds. The bot:
+
+- follows them as they move, so it stays nearby
+- sends them a request right away, so they can try Accept, Decline and Report
+- accepts anything they send it, so they can see the "Accepted" status and push
+
+The code is replaced with "App Review" as soon as the server sees it, so nobody nearby ever learns it. The bot leaves when the reviewer goes hidden or their session times out. Put the code in the App Review notes, and change or remove it after approval.
 
 ## Running the server locally
 
@@ -125,7 +136,6 @@ v0.2. The server passes its test suite and an end-to-end run against the fake pe
 - Being visible keeps GPS running, about like a navigation app.
 - A server restart wipes sessions. The app reconnects quietly with the same nickname.
 - Apple reviews background-location apps closely, and the driving use case adds distracted-driving scrutiny.
-- There's no app icon yet.
 
 ### Next steps
 
