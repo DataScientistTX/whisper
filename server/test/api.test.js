@@ -121,7 +121,7 @@ test('anti-spam: 3 unanswered per person, 6 sends a minute, only people nearby',
   const others = [];
   for (let i = 0; i < 7; i++) others.push(await s.person({ lat: LAT + (i + 1) * M, lon: LON }));
   for (let i = 0; i < 6; i++) {
-    assert.equal((await s.call('POST', '/v1/requests', { token: c.token, body: { to: others[i].id, text: 'x' } })).status, 201);
+    assert.equal((await s.call('POST', '/v1/requests', { token: c.token, body: { to: others[i].id, text: `x ${i}` } })).status, 201);
   }
   const seventh = await s.call('POST', '/v1/requests', { token: c.token, body: { to: others[6].id, text: 'x' } });
   assert.equal(seventh.status, 429);

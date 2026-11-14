@@ -20,9 +20,21 @@ export const LIMITS = {
   maxRadius: 150,
   rangeSlackM: 20,                       // GPS wobble allowance when sending
   sessionsPerIpPer10Min: 30,
+  // Spam protection. IP-based limits are generous because phones on the same
+  // carrier often share one public IP (CGNAT).
+  requestsPerIpPerMinute: 600,           // the app makes ~45 calls a minute
+  maxSessionsPerIp: 50,                  // live sessions behind one IP
+  broadcastCooldownMs: 2 * 60 * 1000,    // one "everyone nearby" send every 2 minutes
+  duplicateWindowMs: 10 * 60 * 1000,     // the same text to more than 5 people in 10 minutes is spam
+  maxDuplicateRecipients: 5,
+  declineWindowMs: 10 * 60 * 1000,       // 5 declines in 10 minutes mutes the sender for 10 minutes
+  declinesToMute: 5,
+  muteMs: 10 * 60 * 1000,
+  maxSpeedMps: 120,                      // faster than ~430 km/h between fixes is a spoofed location
   maxBodyBytes: 8 * 1024,
   reportsToSuspend: 3,                   // distinct people reporting someone suspends them
-  suspensionMs: 24 * 60 * 60 * 1000,     // ... and bans their device and network for a day
+  suspensionMs: 24 * 60 * 60 * 1000,     // ... and bans their device for a day
+  ipSuspensionMs: 60 * 60 * 1000,        // ... and their network for an hour (shared carrier IPs)
   maxStoredReports: 500,
   maxReportNoteLength: 200,
 };
@@ -30,9 +42,16 @@ export const LIMITS = {
 export const REPORT_REASONS = ['harassment', 'threat', 'sexual', 'hate', 'spam', 'other'];
 
 class HttpError extends Error {
-  constructor(status, code, message) { super(message ?? code); this.status = status; this.code = code; }
+  constructor(status, code, message, retryAfterSec) {
+    super(message ?? code);
+    this.status = status;
+    this.code = code;
+    this.retryAfterSec = retryAfterSec;
+  }
 }
 
+// Spam fingerprint: case, spacing, punctuation and accents don't make a message new.
+const spamKey = (text) => text.normalize('NFKD').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 const hashToken = (t) => createHash('sha256').update(t).digest('hex');
 const newId = (bytes = 9) => randomBytes(bytes).toString('base64url');
 const graphemes = (s) => [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(s)].length;
@@ -122,8 +141,16 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
     assertNotBanned({ ip, pushToken: push });
     const hits = (ipHits.get(ip) ?? []).filter((h) => t - h < 10 * 60 * 1000);
     if (hits.length >= LIMITS.sessionsPerIpPer10Min) throw new HttpError(429, 'rate_limited', 'Too many new sessions, try again later');
+    const ipK = ip ? ipKey(ip) : null;
+    if (ipK) {
+      let live = 0;
+      for (const o of sessions.values()) if (o.ipKey === ipK) live++;
+      if (live >= LIMITS.maxSessionsPerIp) throw new HttpError(429, 'rate_limited', 'Too many people on this network right now, try again later', 60);
+    }
     hits.push(t);
     ipHits.set(ip, hits);
+    // One live session per phone: a new one replaces the old.
+    if (push) for (const o of [...sessions.values()]) if (o.pushToken === push) eraseSession(o.id);
 
     const token = randomBytes(32).toString('base64url');
     const s = {
@@ -132,7 +159,10 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
       nickname: assertClean(cleanString(nickname, LIMITS.maxNicknameLength, 'nickname'), 'nickname') || randomNickname(),
       description: assertClean(cleanString(description, LIMITS.maxDescriptionLength, 'description'), 'description') ?? '',
       pushToken: push,
-      ipKey: ip ? ipKey(ip) : null,
+      ipKey: ipK,
+      broadcastAt: 0,
+      declines: [],
+      mutedUntil: 0,
       reportedBy: new Set(),
       loc: null,
       radius: LIMITS.radii.normal,
@@ -177,6 +207,7 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
         eraseSession(s.id);
         throw new HttpError(403, 'suspended', 'This device is suspended after reports from other people. Try again tomorrow.');
       }
+      if (push) for (const o of [...sessions.values()]) if (o.id !== s.id && o.pushToken === push) eraseSession(o.id);
       s.pushToken = push;
     }
     if ('radius' in body) s.radius = parseRadius(body.radius);
@@ -193,6 +224,13 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
 
   function setLocation(s, { lat, lon, accuracy, heading }) {
     if (!validCoord(lat, lon)) throw new HttpError(400, 'invalid_location');
+    if (s.loc) {
+      const dt = Math.max((now() - s.loc.at) / 1000, 1);
+      const slack = (s.loc.accuracy ?? 10) + (Number.isFinite(accuracy) ? accuracy : 10);
+      if (Math.max(distance(s.loc, { lat, lon }) - slack, 0) / dt > LIMITS.maxSpeedMps) {
+        throw new HttpError(409, 'implausible_location', 'Location jumped too far too fast');
+      }
+    }
     s.loc = {
       lat, lon,
       accuracy: Number.isFinite(accuracy) && accuracy >= 0 ? accuracy : null,
@@ -234,8 +272,17 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
     assertClean(clean, 'text');
     if (!s.loc) throw new HttpError(409, 'no_location', 'Send your location first');
     const t = now();
+    if (s.mutedUntil > t) {
+      throw new HttpError(429, 'muted', 'Several people declined your messages. Try again in a few minutes.', Math.ceil((s.mutedUntil - t) / 1000));
+    }
     s.sends = s.sends.filter((x) => t - x < 60 * 1000);
-    if (s.sends.length >= LIMITS.maxSendsPerMinute) throw new HttpError(429, 'rate_limited', 'Slow down: 6 sends a minute');
+    if (s.sends.length >= LIMITS.maxSendsPerMinute) {
+      throw new HttpError(429, 'rate_limited', 'Slow down: 6 sends a minute', Math.ceil((s.sends[0] + 60 * 1000 - t) / 1000));
+    }
+    if (to === 'everyone' && t - s.broadcastAt < LIMITS.broadcastCooldownMs) {
+      throw new HttpError(429, 'broadcast_cooldown', 'You can message everyone nearby once every 2 minutes',
+        Math.ceil((s.broadcastAt + LIMITS.broadcastCooldownMs - t) / 1000));
+    }
 
     const inRange = peopleInRange(s, Math.min(s.radius + LIMITS.rangeSlackM, LIMITS.maxRadius + LIMITS.rangeSlackM));
     let targets;
@@ -259,7 +306,19 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
       throw new HttpError(429, 'too_many_pending', 'Wait for an answer before sending more');
     }
 
+    // The same text to lots of different people is spam, however it's split up.
+    const key = spamKey(clean);
+    const recipients = new Set();
+    for (const r of requests.values()) {
+      if (r.from === s.id && t - r.createdAt < LIMITS.duplicateWindowMs && spamKey(r.text) === key) recipients.add(r.to);
+    }
+    const fresh = eligible.filter((o) => !recipients.has(o.id));
+    if (recipients.size + fresh.length > LIMITS.maxDuplicateRecipients && fresh.length) {
+      throw new HttpError(429, 'duplicate_spam', "You've sent this to a lot of people already. Try again later.", Math.ceil(LIMITS.duplicateWindowMs / 1000));
+    }
+
     s.sends.push(t);
+    if (to === 'everyone') s.broadcastAt = t;
     const created = eligible.map((o) => {
       const r = {
         id: newId(),
@@ -302,6 +361,16 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
     if (r.status === 'accepted') throw new HttpError(409, 'already_accepted');
     const fromId = r.from;
     requests.delete(r.id); // declined text is deleted right away
+    const sender = fromId && sessions.get(fromId);
+    if (sender) {
+      const t = now();
+      sender.declines = sender.declines.filter((x) => t - x < LIMITS.declineWindowMs);
+      sender.declines.push(t);
+      if (sender.declines.length >= LIMITS.declinesToMute) {
+        sender.mutedUntil = t + LIMITS.muteMs;
+        sender.declines = [];
+      }
+    }
     if (block && fromId) blockPerson(s, fromId);
     return { fromId, blocked: Boolean(block && fromId) };
   }
@@ -322,7 +391,7 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
     if (!target) return false;
     const until = now() + LIMITS.suspensionMs;
     if (target.pushToken) bans.set('push:' + target.pushToken, until);
-    if (target.ipKey) bans.set(target.ipKey, until);
+    if (target.ipKey) bans.set(target.ipKey, now() + LIMITS.ipSuspensionMs);
     eraseSession(id);
     for (const r of reports) if (r.target.id === id) r.suspended = reason;
     return true;
@@ -505,10 +574,28 @@ export function createApp({ now, push, filter, adminToken, onReport, log = conso
     }
   }
 
+  // Fixed one-minute window per IP across every endpoint.
+  const ipWindows = new Map(); // ip -> { start, count }
+  const clock = now ?? (() => Date.now());
+  function limitIp(ip) {
+    const t = clock();
+    let w = ipWindows.get(ip);
+    if (!w || t - w.start >= 60_000) {
+      if (ipWindows.size > 50_000) for (const [k, v] of ipWindows) if (t - v.start >= 60_000) ipWindows.delete(k);
+      w = { start: t, count: 0 };
+      ipWindows.set(ip, w);
+    }
+    if (++w.count > LIMITS.requestsPerIpPerMinute) {
+      throw new HttpError(429, 'rate_limited', 'Too many requests', Math.ceil((w.start + 60_000 - t) / 1000));
+    }
+  }
+
   async function route(req, res) {
     const url = new URL(req.url, 'http://x');
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const method = req.method;
+    const ip = (req.headers['x-forwarded-for']?.split(',')[0] ?? req.socket.remoteAddress ?? '').trim();
+    if (path !== '/health') limitIp(ip);
 
     if (path === '/health' && method === 'GET') {
       return send(res, 200, { ok: true });
@@ -519,7 +606,6 @@ export function createApp({ now, push, filter, adminToken, onReport, log = conso
 
     if (path === '/v1/sessions' && method === 'POST') {
       const body = await readJson(req);
-      const ip = (req.headers['x-forwarded-for']?.split(',')[0] ?? req.socket.remoteAddress ?? '').trim();
       return send(res, 201, state.createSession(body, ip));
     }
 
@@ -599,7 +685,10 @@ export function createApp({ now, push, filter, adminToken, onReport, log = conso
     try {
       await route(req, res);
     } catch (e) {
-      if (e instanceof HttpError) return send(res, e.status, { error: e.code, message: e.message });
+      if (e instanceof HttpError) {
+        if (e.retryAfterSec) res.setHeader('retry-after', String(e.retryAfterSec));
+        return send(res, e.status, { error: e.code, message: e.message, ...(e.retryAfterSec ? { retryAfter: e.retryAfterSec } : {}) });
+      }
       log.error?.('[whisper] internal error', e?.stack ?? e);
       send(res, 500, { error: 'internal' });
     }
