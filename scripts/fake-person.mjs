@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Puts a fake person ("Test Bot · Grey Tesla") next to you so you can test with one phone.
-// It stays visible, sends you one message, and auto-accepts anything you send it.
+// It stays visible, sends you one message, and auto-accepts and replies to anything you send it.
 //
 //   node scripts/fake-person.mjs <server-url> <lat> <lon>
 //   node scripts/fake-person.mjs https://whisper-production.up.railway.app 30.2672 -97.7431
@@ -15,6 +15,8 @@ const url = base.replace(/\/+$/, '');
 const lat = Number(latArg) + 0.0001;
 const lon = Number(lonArg) + 0.0001;
 const opener = process.env.FAKE_MESSAGE ?? 'Hi from Test Bot! Your test setup works 👋';
+const replyText = process.env.FAKE_REPLY ?? 'Got it, thanks! 👍';
+const tickMs = Number(process.env.FAKE_TICK_MS) || 4000;
 
 let token = null;
 let greeted = new Set();
@@ -54,6 +56,10 @@ async function tick() {
     if (r.status !== 'pending') continue;
     const acc = await call('POST', `/v1/requests/${r.id}/accept`);
     console.log(`[bot] accepted from ${r.from.nickname}: "${acc.data?.text}"`);
+    if (acc.status === 200 && !r.isReply) {
+      const rep = await call('POST', '/v1/requests', { replyTo: r.id, text: replyText });
+      console.log(`[bot] replied to ${r.from.nickname}: ${rep.status}`);
+    }
   }
   for (const r of inbox.data?.sent ?? []) {
     if (r.status !== 'pending' && !greeted.has('status:' + r.id)) {
@@ -63,14 +69,16 @@ async function tick() {
   }
 }
 
-process.on('SIGINT', async () => {
-  if (token) await call('DELETE', '/v1/me').catch(() => {});
-  console.log('\n[bot] hidden, bye');
-  process.exit(0);
-});
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, async () => {
+    if (token) await call('DELETE', '/v1/me').catch(() => {});
+    console.log('\n[bot] hidden, bye');
+    process.exit(0);
+  });
+}
 
 console.log('[bot] Ctrl-C to stop');
 for (;;) {
   try { await tick(); } catch (e) { console.warn('[bot]', e.message); }
-  await new Promise((r) => setTimeout(r, 4000));
+  await new Promise((r) => setTimeout(r, tickMs));
 }

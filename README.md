@@ -59,7 +59,7 @@ server/            Zero-dependency Node.js server (Node 20+), deploys to Railway
   src/app.js       HTTP routes on top of state.js
   src/apns.js      Apple Push client (HTTP/2, JWT ES256)
   src/geo.js       Distance, bearing, "ahead left" labels
-  test/            node:test suite (npm test)
+  test/            node:test suite (npm test); e2e.test.js runs the real server process
 ios/               SwiftUI app, iOS 17+
   project.yml      XcodeGen spec (generates Whisper.xcodeproj)
   Whisper/         App sources; Config.swift holds the server URL
@@ -125,7 +125,8 @@ The code is replaced with "App Review" as soon as the server sees it, so nobody 
 
 ```sh
 cd server
-npm test          # no dependencies to install
+npm test          # no dependencies to install; includes the end-to-end tests
+npm run test:e2e  # just the end-to-end tests: the real server process, several phones and scripts/fake-person.mjs
 npm start         # listens on $PORT or 3000; pushes are skipped without APNS_* set
 ```
 
