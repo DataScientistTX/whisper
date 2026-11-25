@@ -88,6 +88,11 @@ final class APIClient: @unchecked Sendable {
         try await call("POST", "/v1/requests", body: ["to": to, "text": text])
     }
 
+    /// Answers a message you accepted. It's delivered without an accept step.
+    func sendReply(to requestId: String, text: String) async throws -> SendResponse {
+        try await call("POST", "/v1/requests", body: ["replyTo": requestId, "text": text])
+    }
+
     func accept(id: String) async throws -> AcceptResponse {
         try await call("POST", "/v1/requests/\(id)/accept")
     }

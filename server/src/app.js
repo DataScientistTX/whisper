@@ -4,7 +4,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { createState, LIMITS } from './state.js';
 import { HttpError } from './errors.js';
 import { readJson, send } from './http.js';
-import { requestPushPayload, acceptedPushPayload } from './push.js';
+import { requestPushPayload, acceptedPushPayload, replyPushPayload } from './push.js';
 import { createDemo } from './demo.js';
 import { readFileSync } from 'node:fs';
 
@@ -56,6 +56,7 @@ export function createApp({ now, push, filter, adminToken, onReport, demoCode, l
     now,
     onRequest: (owner, r) => notify(owner, requestPushPayload(r), r.id).catch(() => {}),
     onAccepted: (sender, r) => notify(sender, acceptedPushPayload(r), `acc-${r.id}`).catch(() => {}),
+    onReply: (owner, r) => notify(owner, replyPushPayload(r), r.id).catch(() => {}),
   });
 
   async function route(req, res) {
@@ -128,8 +129,9 @@ export function createApp({ now, push, filter, adminToken, onReport, demoCode, l
       return send(res, 200, state.inbox(me));
     }
     if (path === '/v1/requests' && method === 'POST') {
-      const { created, skipped } = state.sendRequest(me, await readJson(req));
-      for (const r of created) notify(state.sessions.get(r.to), requestPushPayload(r), r.id).catch(() => {});
+      const { created, skipped, reply } = state.sendRequest(me, await readJson(req));
+      const payload = reply ? replyPushPayload : requestPushPayload;
+      for (const r of created) notify(state.sessions.get(r.to), payload(r), r.id).catch(() => {});
       demo.afterSend(created);
       return send(res, 201, {
         sent: created.length,

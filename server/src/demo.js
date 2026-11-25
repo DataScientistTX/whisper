@@ -1,15 +1,16 @@
 // Demo mode for App Review. Reviewers have one phone and can't run scripts, so
 // when someone's description is the secret REVIEW_DEMO_CODE, a "Test Bot"
 // appears about 15 m away, follows them around, sends them a request, and
-// auto-accepts anything they send it. The code is swapped for "App Review"
+// auto-accepts and replies to anything they send it. The code is swapped for "App Review"
 // as soon as it's seen, so nobody else nearby ever sees it.
 
 const BOT_NICKNAME = 'Test Bot';
 const BOT_DESCRIPTION = 'Grey Tesla';
 const BOT_GREETING = 'Hi from Test Bot! This is a demo message. Try Accept, Decline or Report.';
+const BOT_REPLY = 'Got it, thanks! This is an automatic reply from Test Bot.';
 const OFFSET = { lat: 0.0001, lon: 0.0001 }; // about 15 m north-east
 
-export function createDemo({ state, code, onRequest, onAccepted, now = () => Date.now() }) {
+export function createDemo({ state, code, onRequest, onAccepted, onReply, now = () => Date.now() }) {
   const secret = (code ?? '').trim().toLowerCase();
   const bots = new Map(); // owner session id -> bot session id
   const botIds = new Set();
@@ -49,8 +50,18 @@ export function createDemo({ state, code, onRequest, onAccepted, now = () => Dat
     for (const r of created) {
       const bot = botIds.has(r.to) && state.sessions.get(r.to);
       if (!bot) continue;
+      if (r.replyTo) continue; // a reply is already delivered; the bot doesn't answer back
       const { r: accepted, first } = state.accept(bot, r.id);
-      if (first) onAccepted?.(state.sessions.get(accepted.from), accepted);
+      if (!first) continue;
+      const owner = state.sessions.get(accepted.from);
+      onAccepted?.(owner, accepted);
+      // Reply too, so a reviewer sees what a reply looks like.
+      try {
+        const { created: [reply] } = state.sendRequest(bot, { replyTo: accepted.id, text: BOT_REPLY });
+        onReply?.(owner, reply);
+      } catch {
+        // e.g. the bot hit its send cap; the accept alone is enough.
+      }
     }
   }
 

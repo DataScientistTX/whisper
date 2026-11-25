@@ -94,6 +94,8 @@ enum IntentSupport {
             return "Sent to \(p.title). They'll see it if they accept."
         case .everyone(let n):
             return n == 1 ? "Sent to the 1 person nearby." : "Sent to \(n) people nearby."
+        case .reply(let r):
+            return "Replied to \(r.from.title)."
         }
     }
 }

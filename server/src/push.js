@@ -23,3 +23,12 @@ export function acceptedPushPayload(r) {
     requestId: r.id,
   };
 }
+
+export function replyPushPayload(r) {
+  const who = r.fromDescription ? `${r.fromNickname} · ${r.fromDescription}` : r.fromNickname;
+  return {
+    aps: { alert: { title: 'Whisper', body: `${who} replied to your message` }, sound: 'default', 'thread-id': 'whisper-replies' },
+    kind: 'reply',
+    requestId: r.id,
+  };
+}

@@ -13,7 +13,8 @@ Whisper finds people by GPS through a small server, and requests arrive as push 
 2. **See who's nearby.** Within your range (Close 40 m, Normal 80 m, Wide 150 m) you see each person's nickname, description, rough distance and direction ("~25 m · ahead left"). Exact coordinates are never shared.
 3. **Send.** Pick a quick message or type your own (140 characters max), to one person or everyone nearby.
 4. **They decide.** The push says only "Blue Fox · White Toyota wants to send you a message". They tap Accept, Decline or Decline & block, right from the lock screen. Only Accept releases the text, and declined text is deleted.
-5. **Go hidden.** Tapping Go hidden, 3 hours passing, or 15 minutes of inactivity erases the session.
+5. **Reply.** Once you've accepted a message you can answer it once, with a quick reply ("Thanks!") or your own words, for 15 minutes. The reply arrives straight away without an accept step, because the other person started the conversation, and it reaches them even after they've driven out of range. They can reply to your reply in the same way, and report or block it like any message.
+6. **Go hidden.** Tapping Go hidden, 3 hours passing, or 15 minutes of inactivity erases the session.
 
 **Anti-spam:** you can only message people currently near you. There's a cap of 3 unanswered requests per person and 6 sends a minute, and blocking hides both people from each other. On top of that:
 
@@ -80,6 +81,7 @@ All `/v1` calls except `POST /v1/sessions` need `Authorization: Bearer <token>`.
 | PUT | `/v1/me/location` | Report location (`lat`, `lon`, `accuracy`, `heading`) |
 | GET | `/v1/nearby?radius=normal` | People nearby: nickname, distance, direction |
 | POST | `/v1/requests` | Ask to message one person (`to: <id>`) or everyone nearby (`to: "everyone"`) |
+| POST | `/v1/requests` | Reply to a message you accepted (`replyTo: <requestId>`); delivered at once, one reply per message, within 15 minutes |
 | GET | `/v1/inbox` | Incoming requests and messages, sent statuses |
 | POST | `/v1/requests/:id/accept` | Accept and receive the text |
 | POST | `/v1/requests/:id/decline` | Decline, optionally block (`{"block": true}`) |
@@ -115,7 +117,7 @@ App Review tests with one phone and can't run `fake-person.mjs`. With `REVIEW_DE
 
 - follows them as they move, so it stays nearby
 - sends them a request right away, so they can try Accept, Decline and Report
-- accepts anything they send it, so they can see the "Accepted" status and push
+- accepts anything they send it and replies, so they can see the "Accepted" status, a reply and both pushes
 
 The code is replaced with "App Review" as soon as the server sees it, so nobody nearby ever learns it. The bot leaves when the reviewer goes hidden or their session times out. Put the code in the App Review notes, and change or remove it after approval.
 

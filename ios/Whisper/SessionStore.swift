@@ -5,11 +5,14 @@ import UserNotifications
 enum ComposeTarget: Identifiable, Hashable {
     case person(Person)
     case everyone(count: Int)
+    /// Answer a message you accepted. Works even once they're out of range.
+    case reply(IncomingRequest)
 
     var id: String {
         switch self {
         case .person(let p): p.id
         case .everyone: "everyone"
+        case .reply(let r): "reply-\(r.id)"
         }
     }
 
@@ -17,7 +20,13 @@ enum ComposeTarget: Identifiable, Hashable {
         switch self {
         case .person(let p): p.title
         case .everyone(let n): n == 1 ? "Everyone nearby (1 person)" : "Everyone nearby (\(n) people)"
+        case .reply(let r): "Reply to \(r.from.title)"
         }
+    }
+
+    var isReply: Bool {
+        if case .reply = self { return true }
+        return false
     }
 }
 
@@ -255,13 +264,13 @@ final class SessionStore: ObservableObject {
     /// Returns an error message, or nil when sent.
     func send(to target: ComposeTarget, text: String) async -> String? {
         noteInteraction()
-        let to: String
-        switch target {
-        case .person(let p): to = p.id
-        case .everyone: to = "everyone"
-        }
         do {
-            let r = try await api.sendRequest(to: to, text: text)
+            let r: SendResponse
+            switch target {
+            case .person(let p): r = try await api.sendRequest(to: p.id, text: text)
+            case .everyone: r = try await api.sendRequest(to: "everyone", text: text)
+            case .reply(let original): r = try await api.sendReply(to: original.id, text: text)
+            }
             await refresh()
             return r.sent > 0 ? nil : "Nobody could receive it right now."
         } catch APIError.unauthorized {

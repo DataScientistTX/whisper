@@ -39,6 +39,7 @@ export const LIMITS = {
   ipSuspensionMs: 60 * 60 * 1000,        // ... and their network for an hour (shared carrier IPs)
   maxStoredReports: 500,
   maxReportNoteLength: 200,
+  replyWindowMs: 15 * 60 * 1000,         // you can answer a message you accepted for 15 minutes
 };
 
 export const REPORT_REASONS = ['harassment', 'threat', 'sexual', 'hate', 'spam', 'other'];
@@ -259,11 +260,11 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
     };
   }
 
-  function sendRequest(s, { to, text }) {
+  // Checks shared by every kind of send: the text, the mute and the per-minute cap.
+  function checkSend(s, text) {
     const clean = cleanString(text, LIMITS.maxTextLength, 'text');
     if (!clean) throw new HttpError(400, 'empty_text', 'Message is empty');
     assertClean(clean, 'text');
-    if (!s.loc) throw new HttpError(409, 'no_location', 'Send your location first');
     const t = now();
     if (s.mutedUntil > t) {
       throw new HttpError(429, 'muted', 'Several people declined your messages. Try again in a few minutes.', Math.ceil((s.mutedUntil - t) / 1000));
@@ -272,6 +273,66 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
     if (s.sends.length >= LIMITS.maxSendsPerMinute) {
       throw new HttpError(429, 'rate_limited', 'Slow down: 6 sends a minute', Math.ceil((s.sends[0] + 60 * 1000 - t) / 1000));
     }
+    return { clean, t };
+  }
+
+  // Why a message can't be answered, or null when it can. Someone who messaged
+  // you already chose to talk, so one reply per message is allowed for a while
+  // after you accepted it, even once they've driven out of range.
+  function replyBlocker(s, r) {
+    if (!r || r.to !== s.id) return 'not_found';
+    if (r.status !== 'accepted') return 'not_accepted';
+    if (r.repliedAt) return 'already_replied';
+    if (now() - r.decidedAt > LIMITS.replyWindowMs) return 'reply_expired';
+    const other = r.from && sessions.get(r.from);
+    if (!other) return 'gone';
+    if (isBlocked(s, other)) return 'gone';
+    return null;
+  }
+
+  const REPLY_ERRORS = {
+    not_found: [404, 'Message not found'],
+    not_accepted: [409, 'Accept the message before replying'],
+    already_replied: [409, "You've already replied to this message"],
+    reply_expired: [410, 'Too late to reply to this message'],
+    gone: [404, "They've left Whisper"],
+  };
+
+  // A reply is delivered straight away (no accept step) because the other
+  // person started the conversation. They can still report or block it.
+  function sendReply(s, { replyTo, text }) {
+    if (typeof replyTo !== 'string') throw new HttpError(400, 'invalid_reply');
+    const original = requests.get(replyTo);
+    const why = replyBlocker(s, original);
+    if (why) throw new HttpError(REPLY_ERRORS[why][0], why, REPLY_ERRORS[why][1]);
+    const { clean, t } = checkSend(s, text);
+    const other = sessions.get(original.from);
+    s.sends.push(t);
+    original.repliedAt = t;
+    const r = {
+      id: newId(),
+      from: s.id,
+      to: other.id,
+      fromNickname: s.nickname,
+      fromDescription: s.description,
+      toNickname: other.nickname,
+      toDescription: other.description,
+      text: clean,
+      status: 'accepted',
+      broadcast: false,
+      replyTo: original.id,
+      createdAt: t,
+      decidedAt: t,
+    };
+    requests.set(r.id, r);
+    return { created: [r], skipped: 0, reply: true };
+  }
+
+  function sendRequest(s, body = {}) {
+    if (body.replyTo !== undefined && body.replyTo !== null) return sendReply(s, body);
+    const { to, text } = body;
+    if (!s.loc) throw new HttpError(409, 'no_location', 'Send your location first');
+    const { clean, t } = checkSend(s, text);
     if (to === 'everyone' && t - s.broadcastAt < LIMITS.broadcastCooldownMs) {
       throw new HttpError(429, 'broadcast_cooldown', 'You can message everyone nearby once every 2 minutes',
         Math.ceil((s.broadcastAt + LIMITS.broadcastCooldownMs - t) / 1000));
@@ -324,6 +385,7 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
         text: clean,
         status: 'pending',
         broadcast: to === 'everyone',
+        replyTo: null,
         createdAt: t,
         decidedAt: null,
       };
@@ -453,6 +515,8 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
           status: r.status,
           text: r.status === 'accepted' ? r.text : null,
           broadcast: r.broadcast,
+          isReply: Boolean(r.replyTo),
+          canReply: replyBlocker(s, r) === null,
           createdAt: new Date(r.createdAt).toISOString(),
         });
       } else if (r.from === s.id) {
@@ -462,6 +526,7 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
           status: r.status,
           text: r.text,
           broadcast: r.broadcast,
+          isReply: Boolean(r.replyTo),
           createdAt: new Date(r.createdAt).toISOString(),
         });
       }
@@ -474,6 +539,7 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
           status: 'declined',
           text: null,
           broadcast: false,
+          isReply: false,
           createdAt: new Date(x.createdAt).toISOString(),
         });
       }
