@@ -54,7 +54,8 @@ A full CarPlay screen is a separate step: Apple only grants the CarPlay entitlem
 
 ```
 server/            Zero-dependency Node.js server (Node 20+), deploys to Railway
-  src/app.js       State and HTTP API
+  src/state.js     In-memory state: sessions, requests, blocks, reports
+  src/app.js       HTTP routes on top of state.js
   src/apns.js      Apple Push client (HTTP/2, JWT ES256)
   src/geo.js       Distance, bearing, "ahead left" labels
   test/            node:test suite (npm test)
