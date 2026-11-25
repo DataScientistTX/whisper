@@ -63,6 +63,10 @@ final class SessionStore: ObservableObject {
     @Published private(set) var sent: [SentRequest] = []
     @Published private(set) var startedAt: Date?
     @Published var lastError: String?
+    /// A short confirmation shown at the bottom of the screen, like "Sent to Red Owl".
+    @Published private(set) var toast: String?
+    /// "Everyone nearby" is allowed once every 2 minutes; this is when it's free again.
+    @Published private(set) var broadcastAvailableAt: Date?
 
     @Published var descriptionText: String {
         didSet {
@@ -92,6 +96,8 @@ final class SessionStore: ObservableObject {
     private var isForeground = true
     private var lastInteraction = Date()
     private var pushToken: String?
+    private var toastTask: Task<Void, Never>?
+    private var knownPending: Set<String> = []
 
     private enum Keys {
         static let description = "whisper.description"
@@ -175,6 +181,9 @@ final class SessionStore: ObservableObject {
         people = []
         incoming = []
         sent = []
+        knownPending = []
+        broadcastAvailableAt = nil
+        toast = nil
         phase = .hidden
         if let notice { Notifications.showInfo(notice) }
     }
@@ -238,6 +247,9 @@ final class SessionStore: ObservableObject {
             }
             let box = try await api.inbox(foreground: isForeground)
             me = box.me
+            let pending = Set(box.incoming.filter(\.isPending).map(\.id))
+            if isForeground, !pending.subtracting(knownPending).isEmpty { Haptics.newRequest() }
+            knownPending = pending
             incoming = box.incoming
             sent = box.sent
         } catch APIError.unauthorized {
@@ -271,12 +283,23 @@ final class SessionStore: ObservableObject {
             case .everyone: r = try await api.sendRequest(to: "everyone", text: text)
             case .reply(let original): r = try await api.sendReply(to: original.id, text: text)
             }
+            if case .everyone = target { broadcastAvailableAt = Date().addingTimeInterval(Self.broadcastCooldown) }
             await refresh()
-            return r.sent > 0 ? nil : "Nobody could receive it right now."
+            guard r.sent > 0 else { return "Nobody could receive it right now." }
+            Haptics.sent()
+            showToast(Self.sentMessage(for: target, count: r.sent))
+            return nil
         } catch APIError.unauthorized {
             await reconnect()
             return "You were reconnected. Please try again."
+        } catch let error as APIError {
+            if error.code == "broadcast_cooldown", let wait = error.retryAfter {
+                broadcastAvailableAt = Date().addingTimeInterval(TimeInterval(wait))
+            }
+            Haptics.failed()
+            return Self.describe(error)
         } catch {
+            Haptics.failed()
             return Self.describe(error)
         }
     }
@@ -285,6 +308,7 @@ final class SessionStore: ObservableObject {
         noteInteraction()
         do {
             _ = try await api.accept(id: request.id)
+            Haptics.tap()
         } catch {
             lastError = Self.describe(error)
         }
@@ -344,6 +368,26 @@ final class SessionStore: ObservableObject {
         let center = UNUserNotificationCenter.current()
         _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
         UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    static let broadcastCooldown: TimeInterval = 2 * 60
+
+    static func sentMessage(for target: ComposeTarget, count: Int) -> String {
+        switch target {
+        case .person(let p): "Sent to \(p.nickname). They'll see it if they accept."
+        case .everyone: count == 1 ? "Sent to 1 person nearby." : "Sent to \(count) people nearby."
+        case .reply(let r): "Reply sent to \(r.from.nickname)."
+        }
+    }
+
+    func showToast(_ text: String) {
+        toastTask?.cancel()
+        toast = text
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.toast = nil
+        }
     }
 
     static func describe(_ error: Error) -> String {

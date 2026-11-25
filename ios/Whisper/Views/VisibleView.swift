@@ -62,11 +62,9 @@ struct VisibleView: View {
                                     .tint(.gray)
                             }
                         }
-                        Button {
+                        BroadcastButton(availableAt: store.broadcastAvailableAt) {
                             store.noteInteraction()
                             composeTarget = .everyone(count: store.people.count)
-                        } label: {
-                            Label("Message everyone nearby", systemImage: "person.3.fill")
                         }
                     }
                 } header: {
@@ -131,12 +129,49 @@ struct VisibleView: View {
                 }
             }
             .refreshable { await store.refresh() }
+            .overlay(alignment: .bottom) {
+                if let toast = store.toast {
+                    Label(toast, systemImage: "checkmark.circle.fill")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(.bottom, 12)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .accessibilityAddTraits(.isStaticText)
+                }
+            }
+            .animation(.spring(duration: 0.3), value: store.toast)
             .sheet(item: $composeTarget) { target in
                 ComposeView(target: target)
             }
             .sheet(item: $reportTarget) { target in
                 ReportView(target: target)
             }
+        }
+    }
+}
+
+/// "Message everyone nearby", which counts down while the 2-minute cooldown runs.
+struct BroadcastButton: View {
+    let availableAt: Date?
+    let action: () -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let wait = availableAt.map { Int($0.timeIntervalSince(context.date).rounded(.up)) } ?? 0
+            Button(action: action) {
+                HStack {
+                    Label("Message everyone nearby", systemImage: "person.3.fill")
+                    Spacer()
+                    if wait > 0 {
+                        Text(APIError.countdown(wait))
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .disabled(wait > 0)
         }
     }
 }

@@ -135,6 +135,7 @@ struct OKResponse: Decodable {
 struct ErrorBody: Decodable {
     let error: String
     let message: String?
+    let retryAfter: Int?
 }
 
 enum ISODate {
