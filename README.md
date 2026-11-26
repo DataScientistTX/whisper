@@ -45,6 +45,8 @@ Drivers shouldn't type, so the common messages work by voice through Siri, inclu
 
 - "Hey Siri, **Whisper headlights off**" (also: *can I merge*, *trunk open*, *tire low*, *gas cap open*, *something dragging*, *turn signal on*, *thanks*)
 - "Hey Siri, **send a custom Whisper**" asks what it should say, and the dictated text goes through the same content filter
+- "Hey Siri, **read my Whisper**" accepts the newest request and reads it out (also: *what does the Whisper say*)
+- "Hey Siri, **Whisper thanks back**" replies "Thanks!" to the newest message you accepted, even if they've driven on (also: *reply to the Whisper*; the reply text can be changed in Shortcuts)
 - "Hey Siri, **go visible on Whisper**" / "**hide me on Whisper**"
 
 A spoken message goes to **the car ahead** by default: the closest person whose direction is "ahead", then "ahead left" or "ahead right", then simply the closest. In the Shortcuts app you can pick "the closest person" or "everyone nearby" instead. Siri reads back who it went to. These are App Intents in `ios/Whisper/Intents/`, so there's no extension and no extra entitlement.

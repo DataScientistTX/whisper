@@ -315,6 +315,18 @@ final class SessionStore: ObservableObject {
         await refresh()
     }
 
+    /// Accepts a request and returns its text, for Siri to read out.
+    func acceptAndRead(_ request: IncomingRequest) async -> String? {
+        noteInteraction()
+        defer { Task { await refresh() } }
+        do {
+            return try await api.accept(id: request.id).text
+        } catch {
+            lastError = Self.describe(error)
+            return nil
+        }
+    }
+
     func decline(_ request: IncomingRequest, block: Bool) async {
         noteInteraction()
         do {

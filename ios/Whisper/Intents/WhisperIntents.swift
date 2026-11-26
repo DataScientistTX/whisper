@@ -146,6 +146,65 @@ struct SendCustomWhisperIntent: AppIntent {
     }
 }
 
+/// Makes sure the session is up and the inbox is fresh, without waiting for
+/// people nearby (replies and accepting don't need anyone in range).
+@MainActor
+private func freshInbox() async -> SessionStore? {
+    let store = SessionStore.shared
+    if store.phase == .hidden { await store.restore() }
+    guard store.phase == .visible else { return nil }
+    store.noteInteraction()
+    await store.refresh()
+    return store
+}
+
+struct AcceptLatestWhisperIntent: AppIntent {
+    static var title: LocalizedStringResource = "Read the latest Whisper request"
+    static var description = IntentDescription("Accept the newest message request and have Siri read it out.")
+    static var openAppWhenRun = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard let store = await freshInbox() else { return .result(dialog: "You're not visible on Whisper right now.") }
+        guard let request = store.pendingIncoming.first else {
+            if let last = store.messages.first, let text = last.text {
+                return .result(dialog: IntentDialog(stringLiteral: "No new requests. The last message, from \(last.from.title), said: \(text)"))
+            }
+            return .result(dialog: "No new Whisper requests.")
+        }
+        guard let text = await store.acceptAndRead(request) else {
+            return .result(dialog: IntentDialog(stringLiteral: store.lastError ?? "Couldn't open that message."))
+        }
+        return .result(dialog: IntentDialog(stringLiteral: "\(request.from.title) says: \(text)"))
+    }
+}
+
+struct ReplyWhisperIntent: AppIntent {
+    static var title: LocalizedStringResource = "Reply to the latest Whisper"
+    static var description = IntentDescription("Answer the newest message you accepted, even if they've driven on.")
+    static var openAppWhenRun = false
+
+    @Parameter(title: "Reply", default: "Thanks!")
+    var text: String
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Reply \(\.$text) to the latest Whisper")
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard let store = await freshInbox() else { return .result(dialog: "You're not visible on Whisper right now.") }
+        guard let original = store.messages.first(where: \.canReply) else {
+            return .result(dialog: "There's no message to reply to right now.")
+        }
+        let trimmed = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140))
+        if let error = await store.send(to: .reply(original), text: trimmed.isEmpty ? "Thanks!" : trimmed) {
+            return .result(dialog: IntentDialog(stringLiteral: error))
+        }
+        return .result(dialog: IntentDialog(stringLiteral: "Replied to \(original.from.title)."))
+    }
+}
+
 struct GoVisibleIntent: AppIntent {
     static var title: LocalizedStringResource = "Go visible on Whisper"
     static var description = IntentDescription("Let people nearby find you on Whisper.")
@@ -198,6 +257,26 @@ struct WhisperShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Dictate a Whisper",
             systemImageName: "mic.fill"
+        )
+        AppShortcut(
+            intent: AcceptLatestWhisperIntent(),
+            phrases: [
+                "Read my \(.applicationName)",
+                "Accept the \(.applicationName)",
+                "What does the \(.applicationName) say",
+            ],
+            shortTitle: "Read request",
+            systemImageName: "envelope.open.fill"
+        )
+        AppShortcut(
+            intent: ReplyWhisperIntent(),
+            phrases: [
+                "\(.applicationName) thanks back",
+                "Reply to the \(.applicationName)",
+                "Reply with \(.applicationName)",
+            ],
+            shortTitle: "Reply thanks",
+            systemImageName: "arrowshape.turn.up.left.fill"
         )
         AppShortcut(
             intent: GoVisibleIntent(),
