@@ -34,3 +34,15 @@ export function send(res, status, body) {
   });
   res.end(data);
 }
+
+// The client's IP. Behind a proxy (Railway has one) the real address is the one
+// the proxy appended to X-Forwarded-For; anything before it came from the
+// client and can be made up, so trusting the first entry would let anyone dodge
+// the per-IP limits and bans. trustedHops is how many proxies sit in front.
+export function clientIp(req, trustedHops = 1) {
+  const socketIp = req.socket?.remoteAddress ?? '';
+  if (!trustedHops) return socketIp;
+  const chain = String(req.headers['x-forwarded-for'] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (!chain.length) return socketIp;
+  return chain[Math.max(chain.length - trustedHops, 0)];
+}

@@ -106,6 +106,7 @@ Background location reports and background polling don't count as activity. Any 
    - `REPORT_WEBHOOK_URL`: a Slack or Discord incoming webhook that receives abuse reports (strongly recommended)
    - `ADMIN_TOKEN`: a long random string that turns on the `/admin` endpoints
    - `BLOCKLIST_EXTRA`: optional extra filtered words or phrases, comma-separated
+   - `TRUSTED_PROXY_HOPS`: how many proxies sit in front of the server (default `1`, right for Railway; `0` if clients connect directly). The client IP is read from the end of `X-Forwarded-For`, so a made-up entry can't dodge the per-IP limits
    - `REVIEW_DEMO_CODE`: a secret phrase of at least 6 characters that turns on App Review demo mode (see below)
 4. **Configure the app.** Set `apiBaseURL` in `ios/Whisper/Config.swift` to the Railway URL and `supportEmail` to an address you read, and set `PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` to match `APNS_BUNDLE_ID`.
 5. **Build.** Run `brew install xcodegen`, then `cd ios && xcodegen`, then open `Whisper.xcodeproj` in Xcode, pick your Team under Signing & Capabilities, and run on a real iPhone (push and GPS don't work properly in the simulator).

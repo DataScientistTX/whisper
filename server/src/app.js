@@ -3,7 +3,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createState, LIMITS } from './state.js';
 import { HttpError } from './errors.js';
-import { readJson, send } from './http.js';
+import { readJson, send, clientIp } from './http.js';
 import { requestPushPayload, acceptedPushPayload, replyPushPayload } from './push.js';
 import { createDemo } from './demo.js';
 import { readFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
 
 export { LIMITS, REPORT_REASONS, createState } from './state.js';
 
-export function createApp({ now, push, filter, adminToken, onReport, demoCode, log = console } = {}) {
+export function createApp({ now, push, filter, adminToken, onReport, demoCode, trustedProxyHops = 1, log = console } = {}) {
   const state = createState({ now, filter });
   const reportSink = onReport ?? (async () => {});
 
@@ -63,7 +63,7 @@ export function createApp({ now, push, filter, adminToken, onReport, demoCode, l
     const url = new URL(req.url, 'http://x');
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const method = req.method;
-    const ip = (req.headers['x-forwarded-for']?.split(',')[0] ?? req.socket.remoteAddress ?? '').trim();
+    const ip = clientIp(req, trustedProxyHops);
     if (path !== '/health') limitIp(ip);
 
     if (path === '/health' && method === 'GET') {
