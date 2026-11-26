@@ -37,6 +37,7 @@ export function createApp({ now, push, filter, adminToken, onReport, demoCode, t
   // Fixed one-minute window per IP across every endpoint.
   const ipWindows = new Map(); // ip -> { start, count }
   const clock = now ?? (() => Date.now());
+  const startedAt = clock();
   function limitIp(ip) {
     const t = clock();
     let w = ipWindows.get(ip);
@@ -80,6 +81,9 @@ export function createApp({ now, push, filter, adminToken, onReport, demoCode, t
 
     if (path.startsWith('/admin/')) {
       if (!isAdmin(req.headers.authorization)) throw new HttpError(404, 'not_found');
+      if (path === '/admin/stats' && method === 'GET') {
+        return send(res, 200, { version: VERSION, uptimeSec: Math.round((clock() - startedAt) / 1000), ...state.stats() });
+      }
       if (path === '/admin/reports' && method === 'GET') {
         return send(res, 200, { reports: [...state.reports].reverse() });
       }

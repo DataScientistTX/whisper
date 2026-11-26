@@ -89,6 +89,7 @@ All `/v1` calls except `POST /v1/sessions` need `Authorization: Bearer <token>`.
 | POST | `/v1/requests/:id/decline` | Decline, optionally block (`{"block": true}`) |
 | POST | `/v1/blocks` | Block someone from the nearby list (`personId`) |
 | POST | `/v1/reports` | Report a request or message (`requestId`) or a person (`personId`), with `reason` and an optional `note`. This also blocks them |
+| GET | `/admin/stats` | Counts only: live sessions, requests, reports in the last 24 hours by reason, active bans (admin) |
 | GET | `/admin/reports` | Recent reports (needs `Authorization: Bearer $ADMIN_TOKEN`) |
 | POST | `/admin/sessions/:id/suspend` | Suspend someone for 24 hours (admin) |
 | GET | `/health` | `{"ok":true}` |

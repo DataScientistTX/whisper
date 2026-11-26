@@ -548,8 +548,39 @@ export function createState({ now = () => Date.now(), filter = createFilter() } 
     return { me: publicSelf(s), incoming: incoming.sort(byNewest), sent: sent.sort(byNewest) };
   }
 
+  // Counts only: no ids, nicknames, places or text.
+  function stats() {
+    const t = now();
+    let located = 0, pending = 0, accepted = 0, replies = 0;
+    for (const x of sessions.values()) if (hasFreshLocation(x)) located++;
+    for (const r of requests.values()) {
+      if (r.status === 'pending') pending++;
+      else if (r.replyTo) replies++;
+      else accepted++;
+    }
+    const day = 24 * 60 * 60 * 1000;
+    const reportsByReason = Object.fromEntries(REPORT_REASONS.map((x) => [x, 0]));
+    let reports24h = 0;
+    for (const r of reports) {
+      if (t - Date.parse(r.at) > day) continue;
+      reports24h++;
+      reportsByReason[r.reason]++;
+    }
+    let deviceBans = 0, networkBans = 0;
+    for (const [key, until] of bans) {
+      if (until <= t) continue;
+      if (key.startsWith('push:')) deviceBans++; else networkBans++;
+    }
+    return {
+      sessions: { live: sessions.size, withFreshLocation: located },
+      requests: { pending, accepted, replies },
+      reports: { last24h: reports24h, byReason: reportsByReason },
+      bans: { devices: deviceBans, networks: networkBans },
+    };
+  }
+
   return {
-    sessions, requests, tombstones, bans, reports,
+    sessions, requests, tombstones, bans, reports, stats,
     createSession, authenticate, touch, updateMe, setLocation, nearby,
     sendRequest, accept, decline: declineWithTombstone, inbox, eraseSession, sweep, publicSelf,
     blockPerson, report, suspend,
