@@ -101,3 +101,19 @@ test('per-IP request limit answers 429 with Retry-After', async () => {
   s.advance(60_000);
   assert.equal((await s.call('GET', '/', { ip })).status, 200);
 });
+
+test('a made-up X-Forwarded-For entry does not dodge the per-IP limits', async () => {
+  // The proxy appends the real address last; the client controls what's before it.
+  const real = '203.0.113.77';
+  let last;
+  for (let i = 0; i < 31; i++) {
+    const res = await fetch(s.base + '/v1/sessions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `198.51.100.${i}, ${real}` },
+      body: '{}',
+    });
+    last = res.status;
+  }
+  // 30 new sessions per IP per 10 minutes, however the spoofed part changes.
+  assert.equal(last, 429);
+});

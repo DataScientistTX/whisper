@@ -70,8 +70,21 @@ struct IncomingRequest: Decodable, Identifiable, Hashable {
     let text: String?
     let broadcast: Bool
     let createdAt: String
+    // Optional so an older server that doesn't send them still decodes.
+    private let isReplyField: Bool?
+    private let canReplyField: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, from, status, text, broadcast, createdAt
+        case isReplyField = "isReply"
+        case canReplyField = "canReply"
+    }
 
     var isPending: Bool { status == "pending" }
+    /// This message answers one you sent.
+    var isReply: Bool { isReplyField ?? false }
+    /// You can still send one reply to it.
+    var canReply: Bool { canReplyField ?? false }
     var date: Date? { ISODate.parse(createdAt) }
 }
 
@@ -82,7 +95,14 @@ struct SentRequest: Decodable, Identifiable, Hashable {
     let text: String?
     let broadcast: Bool
     let createdAt: String
+    private let isReplyField: Bool?
 
+    private enum CodingKeys: String, CodingKey {
+        case id, to, status, text, broadcast, createdAt
+        case isReplyField = "isReply"
+    }
+
+    var isReply: Bool { isReplyField ?? false }
     var date: Date? { ISODate.parse(createdAt) }
 }
 
@@ -115,6 +135,7 @@ struct OKResponse: Decodable {
 struct ErrorBody: Decodable {
     let error: String
     let message: String?
+    let retryAfter: Int?
 }
 
 enum ISODate {
@@ -156,5 +177,14 @@ enum QuickMessages {
         "Something is dragging under your car",
         "Your turn signal is still on",
         "Thanks for letting me in!",
+    ]
+
+    static let replies = [
+        "Thanks!",
+        "Thanks for the heads-up!",
+        "Fixed it, thanks!",
+        "Sorry about that!",
+        "No problem!",
+        "👍",
     ]
 }

@@ -22,6 +22,7 @@ struct HiddenView: View {
                     TextField("e.g. White Toyota, red jacket", text: $store.descriptionText)
                         .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
+                    DescriptionChips(text: $store.descriptionText)
                 } header: {
                     Text("How people can spot you")
                 } footer: {
@@ -78,5 +79,61 @@ struct HiddenView: View {
             }
             .navigationTitle("Whisper")
         }
+    }
+}
+
+/// One-tap descriptions: a colour and a kind of car make "White SUV".
+/// Tapping another colour or kind swaps that word and keeps the rest.
+struct DescriptionChips: View {
+    @Binding var text: String
+
+    static let colors = ["White", "Black", "Silver", "Grey", "Red", "Blue", "Green"]
+    static let kinds = ["Sedan", "SUV", "Pickup", "Hatchback", "Van", "Motorbike"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            chipRow(Self.colors, selected: Self.word(in: text, from: Self.colors)) { text = Self.applying(color: $0, to: text) }
+            chipRow(Self.kinds, selected: Self.word(in: text, from: Self.kinds)) { text = Self.applying(kind: $0, to: text) }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func chipRow(_ words: [String], selected: String?, tap: @escaping (String) -> Void) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(words, id: \.self) { word in
+                    Button(word) { tap(word) }
+                        .font(.footnote.weight(.medium))
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .tint(word == selected ? .accentColor : .secondary)
+                }
+            }
+        }
+    }
+
+    static func word(in text: String, from list: [String]) -> String? {
+        let words = text.split(separator: " ").map { $0.lowercased() }
+        return list.first { words.contains($0.lowercased()) }
+    }
+
+    static func applying(color: String, to text: String) -> String {
+        var words = text.split(separator: " ").map(String.init)
+        if let i = words.firstIndex(where: { w in colors.contains { $0.lowercased() == w.lowercased() } }) {
+            words[i] = color
+        } else {
+            words.insert(color, at: 0)
+        }
+        return String(words.joined(separator: " ").prefix(40))
+    }
+
+    static func applying(kind: String, to text: String) -> String {
+        var words = text.split(separator: " ").map(String.init)
+        if let i = words.firstIndex(where: { w in kinds.contains { $0.lowercased() == w.lowercased() } }) {
+            words[i] = kind
+        } else {
+            words.append(kind)
+        }
+        return String(words.joined(separator: " ").prefix(40))
     }
 }

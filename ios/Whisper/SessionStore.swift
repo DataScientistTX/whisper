@@ -5,11 +5,14 @@ import UserNotifications
 enum ComposeTarget: Identifiable, Hashable {
     case person(Person)
     case everyone(count: Int)
+    /// Answer a message you accepted. Works even once they're out of range.
+    case reply(IncomingRequest)
 
     var id: String {
         switch self {
         case .person(let p): p.id
         case .everyone: "everyone"
+        case .reply(let r): "reply-\(r.id)"
         }
     }
 
@@ -17,7 +20,13 @@ enum ComposeTarget: Identifiable, Hashable {
         switch self {
         case .person(let p): p.title
         case .everyone(let n): n == 1 ? "Everyone nearby (1 person)" : "Everyone nearby (\(n) people)"
+        case .reply(let r): "Reply to \(r.from.title)"
         }
+    }
+
+    var isReply: Bool {
+        if case .reply = self { return true }
+        return false
     }
 }
 
@@ -54,6 +63,10 @@ final class SessionStore: ObservableObject {
     @Published private(set) var sent: [SentRequest] = []
     @Published private(set) var startedAt: Date?
     @Published var lastError: String?
+    /// A short confirmation shown at the bottom of the screen, like "Sent to Red Owl".
+    @Published private(set) var toast: String?
+    /// "Everyone nearby" is allowed once every 2 minutes; this is when it's free again.
+    @Published private(set) var broadcastAvailableAt: Date?
 
     @Published var descriptionText: String {
         didSet {
@@ -83,6 +96,8 @@ final class SessionStore: ObservableObject {
     private var isForeground = true
     private var lastInteraction = Date()
     private var pushToken: String?
+    private var toastTask: Task<Void, Never>?
+    private var knownPending: Set<String> = []
 
     private enum Keys {
         static let description = "whisper.description"
@@ -166,6 +181,9 @@ final class SessionStore: ObservableObject {
         people = []
         incoming = []
         sent = []
+        knownPending = []
+        broadcastAvailableAt = nil
+        toast = nil
         phase = .hidden
         if let notice { Notifications.showInfo(notice) }
     }
@@ -229,6 +247,9 @@ final class SessionStore: ObservableObject {
             }
             let box = try await api.inbox(foreground: isForeground)
             me = box.me
+            let pending = Set(box.incoming.filter(\.isPending).map(\.id))
+            if isForeground, !pending.subtracting(knownPending).isEmpty { Haptics.newRequest() }
+            knownPending = pending
             incoming = box.incoming
             sent = box.sent
         } catch APIError.unauthorized {
@@ -255,19 +276,30 @@ final class SessionStore: ObservableObject {
     /// Returns an error message, or nil when sent.
     func send(to target: ComposeTarget, text: String) async -> String? {
         noteInteraction()
-        let to: String
-        switch target {
-        case .person(let p): to = p.id
-        case .everyone: to = "everyone"
-        }
         do {
-            let r = try await api.sendRequest(to: to, text: text)
+            let r: SendResponse
+            switch target {
+            case .person(let p): r = try await api.sendRequest(to: p.id, text: text)
+            case .everyone: r = try await api.sendRequest(to: "everyone", text: text)
+            case .reply(let original): r = try await api.sendReply(to: original.id, text: text)
+            }
+            if case .everyone = target { broadcastAvailableAt = Date().addingTimeInterval(Self.broadcastCooldown) }
             await refresh()
-            return r.sent > 0 ? nil : "Nobody could receive it right now."
+            guard r.sent > 0 else { return "Nobody could receive it right now." }
+            Haptics.sent()
+            showToast(Self.sentMessage(for: target, count: r.sent))
+            return nil
         } catch APIError.unauthorized {
             await reconnect()
             return "You were reconnected. Please try again."
+        } catch let error as APIError {
+            if error.code == "broadcast_cooldown", let wait = error.retryAfter {
+                broadcastAvailableAt = Date().addingTimeInterval(TimeInterval(wait))
+            }
+            Haptics.failed()
+            return Self.describe(error)
         } catch {
+            Haptics.failed()
             return Self.describe(error)
         }
     }
@@ -276,10 +308,23 @@ final class SessionStore: ObservableObject {
         noteInteraction()
         do {
             _ = try await api.accept(id: request.id)
+            Haptics.tap()
         } catch {
             lastError = Self.describe(error)
         }
         await refresh()
+    }
+
+    /// Accepts a request and returns its text, for Siri to read out.
+    func acceptAndRead(_ request: IncomingRequest) async -> String? {
+        noteInteraction()
+        defer { Task { await refresh() } }
+        do {
+            return try await api.accept(id: request.id).text
+        } catch {
+            lastError = Self.describe(error)
+            return nil
+        }
     }
 
     func decline(_ request: IncomingRequest, block: Bool) async {
@@ -335,6 +380,26 @@ final class SessionStore: ObservableObject {
         let center = UNUserNotificationCenter.current()
         _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
         UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    static let broadcastCooldown: TimeInterval = 2 * 60
+
+    static func sentMessage(for target: ComposeTarget, count: Int) -> String {
+        switch target {
+        case .person(let p): "Sent to \(p.nickname). They'll see it if they accept."
+        case .everyone: count == 1 ? "Sent to 1 person nearby." : "Sent to \(count) people nearby."
+        case .reply(let r): "Reply sent to \(r.from.nickname)."
+        }
+    }
+
+    func showToast(_ text: String) {
+        toastTask?.cancel()
+        toast = text
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.toast = nil
+        }
     }
 
     static func describe(_ error: Error) -> String {

@@ -12,6 +12,8 @@ const { handler, sweep, demo } = createApp({
   adminToken: process.env.ADMIN_TOKEN || null,
   onReport: createReportSink(process.env),
   demoCode: process.env.REVIEW_DEMO_CODE,
+  // Railway puts one proxy in front of the app. Set 0 when nothing does.
+  trustedProxyHops: process.env.TRUSTED_PROXY_HOPS === undefined ? 1 : Number(process.env.TRUSTED_PROXY_HOPS),
 });
 if (demo.enabled) console.log('[whisper] App Review demo mode is on');
 if (!process.env.REPORT_WEBHOOK_URL) console.warn('[whisper] REPORT_WEBHOOK_URL not set: abuse reports only go to the log');

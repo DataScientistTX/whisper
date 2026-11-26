@@ -62,11 +62,9 @@ struct VisibleView: View {
                                     .tint(.gray)
                             }
                         }
-                        Button {
+                        BroadcastButton(availableAt: store.broadcastAvailableAt) {
                             store.noteInteraction()
                             composeTarget = .everyone(count: store.people.count)
-                        } label: {
-                            Label("Message everyone nearby", systemImage: "person.3.fill")
                         }
                     }
                 } header: {
@@ -76,16 +74,28 @@ struct VisibleView: View {
                 if !store.messages.isEmpty {
                     Section("Messages") {
                         ForEach(store.messages) { r in
-                            MessageRow(request: r)
-                                .contextMenu {
-                                    Button("Report", systemImage: "exclamationmark.bubble", role: .destructive) {
-                                        reportTarget = .incoming(r)
-                                    }
+                            MessageRow(request: r) {
+                                store.noteInteraction()
+                                composeTarget = .reply(r)
+                            }
+                            .contextMenu {
+                                if r.canReply {
+                                    Button("Reply", systemImage: "arrowshape.turn.up.left") { composeTarget = .reply(r) }
                                 }
-                                .swipeActions {
-                                    Button("Report", systemImage: "exclamationmark.bubble") { reportTarget = .incoming(r) }
-                                        .tint(.red)
+                                Button("Report", systemImage: "exclamationmark.bubble", role: .destructive) {
+                                    reportTarget = .incoming(r)
                                 }
+                            }
+                            .swipeActions {
+                                Button("Report", systemImage: "exclamationmark.bubble") { reportTarget = .incoming(r) }
+                                    .tint(.red)
+                            }
+                            .swipeActions(edge: .leading) {
+                                if r.canReply {
+                                    Button("Reply", systemImage: "arrowshape.turn.up.left") { composeTarget = .reply(r) }
+                                        .tint(.accentColor)
+                                }
+                            }
                         }
                     }
                 }
@@ -119,12 +129,49 @@ struct VisibleView: View {
                 }
             }
             .refreshable { await store.refresh() }
+            .overlay(alignment: .bottom) {
+                if let toast = store.toast {
+                    Label(toast, systemImage: "checkmark.circle.fill")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(.bottom, 12)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .accessibilityAddTraits(.isStaticText)
+                }
+            }
+            .animation(.spring(duration: 0.3), value: store.toast)
             .sheet(item: $composeTarget) { target in
                 ComposeView(target: target)
             }
             .sheet(item: $reportTarget) { target in
                 ReportView(target: target)
             }
+        }
+    }
+}
+
+/// "Message everyone nearby", which counts down while the 2-minute cooldown runs.
+struct BroadcastButton: View {
+    let availableAt: Date?
+    let action: () -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let wait = availableAt.map { Int($0.timeIntervalSince(context.date).rounded(.up)) } ?? 0
+            Button(action: action) {
+                HStack {
+                    Label("Message everyone nearby", systemImage: "person.3.fill")
+                    Spacer()
+                    if wait > 0 {
+                        Text(APIError.countdown(wait))
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .disabled(wait > 0)
         }
     }
 }
@@ -190,17 +237,28 @@ struct IncomingRow: View {
 
 struct MessageRow: View {
     let request: IncomingRequest
+    var onReply: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(request.from.title).font(.footnote.weight(.semibold))
+                if request.isReply {
+                    Label(request.from.title, systemImage: "arrowshape.turn.up.left.fill")
+                        .font(.footnote.weight(.semibold))
+                } else {
+                    Text(request.from.title).font(.footnote.weight(.semibold))
+                }
                 Spacer()
                 if let d = request.date {
                     Text(d, style: .time).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Text(request.text ?? "").font(.title3)
+            if request.canReply {
+                Button("Reply", systemImage: "arrowshape.turn.up.left", action: onReply)
+                    .font(.footnote.weight(.semibold))
+                    .buttonStyle(.borderless)
+            }
         }
         .padding(.vertical, 4)
     }
@@ -214,7 +272,7 @@ struct SentRow: View {
             HStack {
                 Text("To \(request.to.title)").font(.footnote.weight(.semibold))
                 Spacer()
-                StatusBadge(status: request.status)
+                StatusBadge(status: request.isReply ? "delivered" : request.status)
             }
             if let text = request.text {
                 Text(text).foregroundStyle(.secondary)
@@ -240,6 +298,7 @@ struct StatusBadge: View {
         switch status {
         case "accepted": "Accepted"
         case "declined": "Declined"
+        case "delivered": "Replied"
         default: "Waiting"
         }
     }
@@ -248,6 +307,7 @@ struct StatusBadge: View {
         switch status {
         case "accepted": .green
         case "declined": .red
+        case "delivered": .blue
         default: .orange
         }
     }

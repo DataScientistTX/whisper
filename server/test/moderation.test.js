@@ -114,3 +114,22 @@ test('admin can list reports and suspend; endpoints hidden without the token', a
   assert.equal(sus.body.suspended, true);
   assert.equal((await s.call('GET', '/v1/me', { token: x.token })).status, 401);
 });
+
+test('admin stats are counts only and need the admin token', async () => {
+  assert.equal((await s.call('GET', '/admin/stats')).status, 404);
+  const a = await s.person({ nickname: 'Stat A', lat: 10, lon: 10 });
+  const b = await s.person({ nickname: 'Stat B', lat: 10 + 10 * M, lon: 10 });
+  await s.call('POST', '/v1/requests', { token: a.token, body: { to: b.id, text: 'hello there' } });
+  await s.call('POST', '/v1/reports', { token: b.token, body: { personId: a.id, reason: 'spam' } });
+
+  const r = await s.call('GET', '/admin/stats', { token: 'admin-secret' });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.sessions.live >= 2);
+  assert.ok(r.body.sessions.withFreshLocation >= 2);
+  assert.ok(r.body.reports.byReason.spam >= 1);
+  assert.match(r.body.version, /^\d+\.\d+\.\d+$/);
+  // Nothing identifying leaks into the stats.
+  const raw = JSON.stringify(r.body);
+  for (const secret of ['Stat A', 'hello there', a.id, '"lat"']) assert.equal(raw.includes(secret), false, secret);
+  for (const p of [a, b]) await s.call('DELETE', '/v1/me', { token: p.token });
+});

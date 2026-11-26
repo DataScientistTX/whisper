@@ -15,8 +15,8 @@ struct ComposeView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Quick messages") {
-                    ForEach(QuickMessages.all, id: \.self) { message in
+                Section(target.isReply ? "Quick replies" : "Quick messages") {
+                    ForEach(target.isReply ? QuickMessages.replies : QuickMessages.all, id: \.self) { message in
                         Button(message) { send(message) }
                     }
                 }
@@ -37,7 +37,9 @@ struct ComposeView: View {
                             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 } footer: {
-                    Text("They only see your nickname and description until they accept. Please don't type while driving.")
+                    Text(target.isReply
+                         ? "Replies arrive right away, even if they've moved out of range. You get one reply per message. Please don't type while driving."
+                         : "They only see your nickname and description until they accept. Please don't type while driving.")
                 }
 
                 if let error {

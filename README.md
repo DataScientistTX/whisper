@@ -13,7 +13,8 @@ Whisper finds people by GPS through a small server, and requests arrive as push 
 2. **See who's nearby.** Within your range (Close 40 m, Normal 80 m, Wide 150 m) you see each person's nickname, description, rough distance and direction ("~25 m · ahead left"). Exact coordinates are never shared.
 3. **Send.** Pick a quick message or type your own (140 characters max), to one person or everyone nearby.
 4. **They decide.** The push says only "Blue Fox · White Toyota wants to send you a message". They tap Accept, Decline or Decline & block, right from the lock screen. Only Accept releases the text, and declined text is deleted.
-5. **Go hidden.** Tapping Go hidden, 3 hours passing, or 15 minutes of inactivity erases the session.
+5. **Reply.** Once you've accepted a message you can answer it once, with a quick reply ("Thanks!") or your own words, for 15 minutes. The reply arrives straight away without an accept step, because the other person started the conversation, and it reaches them even after they've driven out of range. They can reply to your reply in the same way, and report or block it like any message.
+6. **Go hidden.** Tapping Go hidden, 3 hours passing, or 15 minutes of inactivity erases the session.
 
 **Anti-spam:** you can only message people currently near you. There's a cap of 3 unanswered requests per person and 6 sends a minute, and blocking hides both people from each other. On top of that:
 
@@ -44,6 +45,8 @@ Drivers shouldn't type, so the common messages work by voice through Siri, inclu
 
 - "Hey Siri, **Whisper headlights off**" (also: *can I merge*, *trunk open*, *tire low*, *gas cap open*, *something dragging*, *turn signal on*, *thanks*)
 - "Hey Siri, **send a custom Whisper**" asks what it should say, and the dictated text goes through the same content filter
+- "Hey Siri, **read my Whisper**" accepts the newest request and reads it out (also: *what does the Whisper say*)
+- "Hey Siri, **Whisper thanks back**" replies "Thanks!" to the newest message you accepted, even if they've driven on (also: *reply to the Whisper*; the reply text can be changed in Shortcuts)
 - "Hey Siri, **go visible on Whisper**" / "**hide me on Whisper**"
 
 A spoken message goes to **the car ahead** by default: the closest person whose direction is "ahead", then "ahead left" or "ahead right", then simply the closest. In the Shortcuts app you can pick "the closest person" or "everyone nearby" instead. Siri reads back who it went to. These are App Intents in `ios/Whisper/Intents/`, so there's no extension and no extra entitlement.
@@ -54,10 +57,11 @@ A full CarPlay screen is a separate step: Apple only grants the CarPlay entitlem
 
 ```
 server/            Zero-dependency Node.js server (Node 20+), deploys to Railway
-  src/app.js       State and HTTP API
+  src/state.js     In-memory state: sessions, requests, blocks, reports
+  src/app.js       HTTP routes on top of state.js
   src/apns.js      Apple Push client (HTTP/2, JWT ES256)
   src/geo.js       Distance, bearing, "ahead left" labels
-  test/            node:test suite (npm test)
+  test/            node:test suite (npm test); e2e.test.js runs the real server process
 ios/               SwiftUI app, iOS 17+
   project.yml      XcodeGen spec (generates Whisper.xcodeproj)
   Whisper/         App sources; Config.swift holds the server URL
@@ -79,11 +83,13 @@ All `/v1` calls except `POST /v1/sessions` need `Authorization: Bearer <token>`.
 | PUT | `/v1/me/location` | Report location (`lat`, `lon`, `accuracy`, `heading`) |
 | GET | `/v1/nearby?radius=normal` | People nearby: nickname, distance, direction |
 | POST | `/v1/requests` | Ask to message one person (`to: <id>`) or everyone nearby (`to: "everyone"`) |
+| POST | `/v1/requests` | Reply to a message you accepted (`replyTo: <requestId>`); delivered at once, one reply per message, within 15 minutes |
 | GET | `/v1/inbox` | Incoming requests and messages, sent statuses |
 | POST | `/v1/requests/:id/accept` | Accept and receive the text |
 | POST | `/v1/requests/:id/decline` | Decline, optionally block (`{"block": true}`) |
 | POST | `/v1/blocks` | Block someone from the nearby list (`personId`) |
 | POST | `/v1/reports` | Report a request or message (`requestId`) or a person (`personId`), with `reason` and an optional `note`. This also blocks them |
+| GET | `/admin/stats` | Counts only: live sessions, requests, reports in the last 24 hours by reason, active bans (admin) |
 | GET | `/admin/reports` | Recent reports (needs `Authorization: Bearer $ADMIN_TOKEN`) |
 | POST | `/admin/sessions/:id/suspend` | Suspend someone for 24 hours (admin) |
 | GET | `/health` | `{"ok":true}` |
@@ -103,6 +109,7 @@ Background location reports and background polling don't count as activity. Any 
    - `REPORT_WEBHOOK_URL`: a Slack or Discord incoming webhook that receives abuse reports (strongly recommended)
    - `ADMIN_TOKEN`: a long random string that turns on the `/admin` endpoints
    - `BLOCKLIST_EXTRA`: optional extra filtered words or phrases, comma-separated
+   - `TRUSTED_PROXY_HOPS`: how many proxies sit in front of the server (default `1`, right for Railway; `0` if clients connect directly). The client IP is read from the end of `X-Forwarded-For`, so a made-up entry can't dodge the per-IP limits
    - `REVIEW_DEMO_CODE`: a secret phrase of at least 6 characters that turns on App Review demo mode (see below)
 4. **Configure the app.** Set `apiBaseURL` in `ios/Whisper/Config.swift` to the Railway URL and `supportEmail` to an address you read, and set `PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` to match `APNS_BUNDLE_ID`.
 5. **Build.** Run `brew install xcodegen`, then `cd ios && xcodegen`, then open `Whisper.xcodeproj` in Xcode, pick your Team under Signing & Capabilities, and run on a real iPhone (push and GPS don't work properly in the simulator).
@@ -114,7 +121,7 @@ App Review tests with one phone and can't run `fake-person.mjs`. With `REVIEW_DE
 
 - follows them as they move, so it stays nearby
 - sends them a request right away, so they can try Accept, Decline and Report
-- accepts anything they send it, so they can see the "Accepted" status and push
+- accepts anything they send it and replies, so they can see the "Accepted" status, a reply and both pushes
 
 The code is replaced with "App Review" as soon as the server sees it, so nobody nearby ever learns it. The bot leaves when the reviewer goes hidden or their session times out. Put the code in the App Review notes, and change or remove it after approval.
 
@@ -122,7 +129,8 @@ The code is replaced with "App Review" as soon as the server sees it, so nobody 
 
 ```sh
 cd server
-npm test          # no dependencies to install
+npm test          # no dependencies to install; includes the end-to-end tests
+npm run test:e2e  # just the end-to-end tests: the real server process, several phones and scripts/fake-person.mjs
 npm start         # listens on $PORT or 3000; pushes are skipped without APNS_* set
 ```
 

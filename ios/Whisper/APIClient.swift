@@ -3,17 +3,44 @@ import CoreLocation
 
 enum APIError: LocalizedError {
     case unauthorized
-    case server(status: Int, code: String, message: String?)
+    case server(status: Int, code: String, message: String?, retryAfter: Int? = nil)
     case transport(Error)
     case decoding(Error)
 
     var errorDescription: String? {
         switch self {
-        case .unauthorized: "Your session ended."
-        case .server(_, let code, let message): message ?? code
-        case .transport: "Can't reach the Whisper server. Check your connection."
-        case .decoding: "Unexpected answer from the server."
+        case .unauthorized:
+            return "Your session ended."
+        case .server(_, let code, let message, let retryAfter):
+            let text = message ?? code
+            // Add a countdown unless the server's message already says when.
+            guard let retryAfter, retryAfter > 0, !text.localizedCaseInsensitiveContains("try again") else { return text }
+            var base = text
+            while base.hasSuffix(".") { base.removeLast() }
+            return "\(base). Try again in \(Self.countdown(retryAfter))."
+        case .transport:
+            return "Can't reach the Whisper server. Check your connection."
+        case .decoding:
+            return "Unexpected answer from the server."
         }
+    }
+
+    /// Seconds until the server lets you try again, when it said so.
+    var retryAfter: Int? {
+        if case .server(_, _, _, let s) = self { return s }
+        return nil
+    }
+
+    var code: String? {
+        if case .server(_, let c, _, _) = self { return c }
+        return nil
+    }
+
+    /// 45 -> "45 seconds", 105 -> "1:45", 600 -> "10 minutes"
+    static func countdown(_ seconds: Int) -> String {
+        if seconds < 60 { return seconds == 1 ? "1 second" : "\(seconds) seconds" }
+        if seconds % 60 == 0 { return seconds == 60 ? "1 minute" : "\(seconds / 60) minutes" }
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
 
@@ -88,6 +115,11 @@ final class APIClient: @unchecked Sendable {
         try await call("POST", "/v1/requests", body: ["to": to, "text": text])
     }
 
+    /// Answers a message you accepted. It's delivered without an accept step.
+    func sendReply(to requestId: String, text: String) async throws -> SendResponse {
+        try await call("POST", "/v1/requests", body: ["replyTo": requestId, "text": text])
+    }
+
     func accept(id: String) async throws -> AcceptResponse {
         try await call("POST", "/v1/requests/\(id)/accept")
     }
@@ -143,7 +175,8 @@ final class APIClient: @unchecked Sendable {
         if status == 401 { throw APIError.unauthorized }
         guard (200..<300).contains(status) else {
             let e = try? JSONDecoder().decode(ErrorBody.self, from: data)
-            throw APIError.server(status: status, code: e?.error ?? "http_\(status)", message: e?.message)
+            let header = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After").flatMap { Int($0) }
+            throw APIError.server(status: status, code: e?.error ?? "http_\(status)", message: e?.message, retryAfter: e?.retryAfter ?? header)
         }
         do {
             return try JSONDecoder().decode(T.self, from: data)
